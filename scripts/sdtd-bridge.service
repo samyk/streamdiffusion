@@ -1,0 +1,16 @@
+[Unit]
+Description=StreamDiffusion TouchDesigner Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/c/samysd
+Environment=SDTD_ACTION=foreground
+ExecStart=/bin/bash -lc 'cd %h/c/samysd && source .venv/bin/activate && source scripts/env_cuda.sh && SDTD_ACTION=foreground scripts/run_bridge_daemon.sh'
+ExecStop=/bin/bash -lc 'SDTD_ACTION=stop %h/c/samysd/scripts/run_bridge_daemon.sh'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

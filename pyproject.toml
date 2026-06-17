@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "streamdiffusion-td-bridge"
+version = "0.1.0"
+description = "LAN bridge between TouchDesigner and StreamDiffusion using NDI video and WebSocket control."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "pillow",
+  "websockets",
+]
+
+[project.optional-dependencies]
+ndi = [
+  "ndi-python",
+]
+inference = [
+  "diffusers==0.24.0",
+  "transformers",
+  "accelerate",
+  "fire",
+  "omegaconf",
+]
+upscaler = [
+  "spandrel",
+  "nvidia-vfx",
+]
+dev = [
+  "ruff",
+]
+
+[project.scripts]
+sdtd-bridge = "streamdiffusion_td_bridge.cli:main"
+sdtd-latency-probe = "streamdiffusion_td_bridge.latency_probe:main"
+sdtd-verify-gpu = "streamdiffusion_td_bridge.verify_gpu:main"
+sdtd-verify-inference = "streamdiffusion_td_bridge.verify_inference:main"
+sdtd-touchdesigner-helper = "streamdiffusion_td_bridge.touchdesigner_helper:main"
+
+[tool.setuptools.packages.find]
+include = ["streamdiffusion_td_bridge*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
