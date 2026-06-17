@@ -1,0 +1,277 @@
+"""
+Add missing HAL remote params to an existing hal_control COMP (no destroy).
+
+Run in TouchDesigner (or via touchmcp execute_python_script):
+
+    exec(open("/Users/samy/c/touch/samysd/touchdesigner/upgrade_hal_control.py", encoding="utf-8").read())
+"""
+
+try:
+    INSTANCE
+except NameError:
+    INSTANCE = "a"
+
+import sys
+
+REPO = "/Users/samy/c/touch/samysd/touchdesigner"
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+
+import importlib
+
+import hal_control_defs
+
+importlib.reload(hal_control_defs)
+
+from hal_control_defs import (
+    HAL_CONTROL_PARSCOPE,
+    TD_HAL_DEFAULTS,
+    UPSCALE_FACTOR_LABELS,
+    UPSCALE_FACTOR_NAMES,
+    UPSCALE_MAXINE_QUALITY_LABELS,
+    UPSCALE_MAXINE_QUALITY_NAMES,
+    UPSCALE_METHOD_LABELS,
+    UPSCALE_METHOD_NAMES,
+    apply_td_hal_defaults,
+)
+from instances import get_instance
+
+profile = get_instance(INSTANCE)
+SYNC_PATH = f"{REPO}/hal_remote_sync.py"
+LAYOUT_PATH = f"{REPO}/vidout_combine_layout.py"
+ctrl = op(profile.hal_control)
+if ctrl is None:
+    raise RuntimeError(f"Missing {profile.hal_control}. Run build_hal_control.py first.")
+
+
+def _page(name: str):
+    for page in ctrl.customPages:
+        if page.name == name:
+            return page
+    return ctrl.appendCustomPage(name)
+
+
+def _ensure_toggle(page, name: str, label: str, default: bool) -> None:
+    if hasattr(ctrl.par, name):
+        return
+    page.appendToggle(name, label=label)
+    setattr(ctrl.par, name, default)
+
+
+def _ensure_menu(page, name: str, label: str, names, labels, default: str) -> None:
+    if hasattr(ctrl.par, name):
+        par = getattr(ctrl.par, name)
+        par.menuNames = names
+        par.menuLabels = labels
+        return
+    page.appendMenu(name, label=label)
+    par = getattr(ctrl.par, name)
+    par.menuNames = names
+    par.menuLabels = labels
+    setattr(ctrl.par, name, default)
+
+
+def _ensure_str(page, name: str, label: str, default: str = "") -> None:
+    if hasattr(ctrl.par, name):
+        return
+    page.appendStr(name, label=label)
+    setattr(ctrl.par, name, default)
+
+
+def _ensure_int(page, name: str, label: str, default: int, norm_min: int, norm_max: int) -> None:
+    if hasattr(ctrl.par, name):
+        return
+    par = page.appendInt(name, label=label)
+    par.normMin = norm_min
+    par.normMax = norm_max
+    setattr(ctrl.par, name, default)
+
+
+def _ensure_float(page, name: str, label: str, default: float) -> None:
+    if hasattr(ctrl.par, name):
+        return
+    page.appendFloat(name, label=label)
+    setattr(ctrl.par, name, default)
+
+
+# --- Upscale (hal-only before this upgrade) ---
+upscale = _page("Upscale")
+_ensure_toggle(upscale, "Upscaleenabled", "Upscale Enabled", TD_HAL_DEFAULTS["Upscaleenabled"])
+_ensure_menu(
+    upscale,
+    "Upscalefactor",
+    "Upscale Factor",
+    UPSCALE_FACTOR_NAMES,
+    UPSCALE_FACTOR_LABELS,
+    TD_HAL_DEFAULTS["Upscalefactor"],
+)
+_ensure_menu(
+    upscale,
+    "Upscalemethod",
+    "Upscale Method",
+    UPSCALE_METHOD_NAMES,
+    UPSCALE_METHOD_LABELS,
+    TD_HAL_DEFAULTS["Upscalemethod"],
+)
+_ensure_toggle(upscale, "Upscalehalf", "Real-ESRGAN FP16 (half)", TD_HAL_DEFAULTS["Upscalehalf"])
+_ensure_menu(
+    upscale,
+    "Upscalemaxinequality",
+    "Maxine Quality",
+    UPSCALE_MAXINE_QUALITY_NAMES,
+    UPSCALE_MAXINE_QUALITY_LABELS,
+    TD_HAL_DEFAULTS["Upscalemaxinequality"],
+)
+_ensure_str(upscale, "Upscalemodel", "Custom Upscale Model (.pth)")
+
+# --- Params that may be missing on older builds ---
+quality = _page("Quality")
+_ensure_int(quality, "Framebatch", "Frame Batch Count", TD_HAL_DEFAULTS["Framebatch"], 1, 8)
+_ensure_toggle(
+    quality,
+    "Fluxtransformerengine",
+    "FLUX Blackwell Transformer Engine",
+    TD_HAL_DEFAULTS["Fluxtransformerengine"],
+)
+
+advanced = _page("Advanced")
+_ensure_str(advanced, "Ipmodel", "IP-Adapter Model (HF id)", "h94/IP-Adapter")
+
+display = _page("Display")
+_ensure_float(display, "Pipscale", "PiP Size", TD_HAL_DEFAULTS["Pipscale"])
+_ensure_float(display, "Textscale", "Text Size", TD_HAL_DEFAULTS["Textscale"])
+_ensure_float(display, "Textlift", "Text Lift (px)", TD_HAL_DEFAULTS["Textlift"])
+
+model = _page("Model")
+if hasattr(ctrl.par, "Preset"):
+    ctrl.par.Preset.menuNames = [
+        "sdxl_turbo_fast",
+        "sdxl_turbo_quality",
+        "sd_turbo_fast",
+        "sd_turbo_quality",
+        "lcm_lora_style",
+        "flux2_klein_fast",
+        "flux2_klein_quality",
+        "flux2_klein_9b",
+        "passthrough",
+    ]
+    ctrl.par.Preset.menuLabels = [
+        "SDXL Turbo Fast",
+        "SDXL Turbo Quality",
+        "SD Turbo Fast",
+        "SD Turbo Quality",
+        "SD1.5 LCM LoRA",
+        "FLUX.2 Klein Fast (4B)",
+        "FLUX.2 Klein Quality (4B)",
+        "FLUX.2 Klein 9B",
+        "Passthrough",
+    ]
+
+denoise_page = _page("Denoise")
+if denoise_page is None:
+    denoise_page = _page("AI")
+if hasattr(ctrl.par, "Denoise"):
+    ctrl.par.Denoise.label = "Steps (Klein 1-6) / T-index 1 (Turbo 1-49)"
+    if hasattr(ctrl.par.Denoise, "normMin"):
+        ctrl.par.Denoise.normMin = 1
+    if hasattr(ctrl.par.Denoise, "normMax"):
+        ctrl.par.Denoise.normMax = 49
+for name, label in (
+    ("Step2", "Extra step (Klein) / T-index 2 (Turbo, 0=off)"),
+    ("Step3", "Extra step (Klein) / T-index 3 (Turbo)"),
+    ("Step4", "Extra step (Klein) / T-index 4 (Turbo)"),
+):
+    if hasattr(ctrl.par, name):
+        getattr(ctrl.par, name).label = label
+        if hasattr(getattr(ctrl.par, name), "normMax"):
+            getattr(ctrl.par, name).normMax = 49
+
+apply_td_hal_defaults(ctrl)
+
+ctrl.par.Remotehost = profile.hal_host
+ctrl.par.Remoteport = profile.daydream_port
+ctrl.par.Streamid = profile.stream_id
+
+# --- Refresh sync DAT from repo ---
+sync_dat = op(profile.sync_dat)
+if sync_dat is None:
+    raise RuntimeError(f"Missing {profile.sync_dat}")
+
+sync_body = open(SYNC_PATH, encoding="utf-8").read()
+sync_body = sync_body.replace(
+    'CONTROL_PATH = "/project1/hal_control"',
+    f'CONTROL_PATH = "{profile.hal_control}"',
+)
+sync_body = sync_body.replace("REMOTE_PORT = 8780", f"REMOTE_PORT = {profile.daydream_port}")
+sync_body = sync_body.replace('STREAM_ID = "remote-1"', f'STREAM_ID = "{profile.stream_id}"')
+sync_dat.text = sync_body
+
+# --- Refresh combine layout DAT + per-frame hook ---
+layout_dat = op(f"{profile.vidout}/combine_layout")
+if layout_dat is not None:
+    layout_dat.text = open(LAYOUT_PATH, encoding="utf-8").read()
+
+exec_dat = op(profile.layout_exec)
+if exec_dat is not None:
+    exec_dat.par.active = True
+    exec_dat.par.start = True
+    exec_dat.par.framestart = True
+    if layout_dat is not None:
+        exec_dat.par.file = layout_dat.path
+    exec_dat.text = (
+        "def onFrameStart(frame):\n"
+        f"    op('{profile.vidout}/combine_layout').module.update_layout('{profile.vidout}')\n"
+        "    return\n"
+    )
+
+# --- Rebuild floating UI ---
+existing_ui = op(profile.hal_control_ui)
+if existing_ui:
+    existing_ui.destroy()
+
+ui = op("/project1").create("parameterCOMP", f"hal_control_ui{profile.suffix}")
+ui.nodeX = 500 if profile.key == "a" else 1100
+ui.nodeY = 200
+ui.par.op = ctrl.path
+ui.par.header = True
+ui.par.custom = True
+ui.par.builtin = False
+ui.par.pagescope = "*"
+ui.par.parscope = HAL_CONTROL_PARSCOPE
+ui.par.allowexpand = True
+ui.par.inputeditor = True
+ui.par.labels = True
+ui.par.separators = True
+ui.par.compress = True
+ui.par.pvscrollbar = True
+ui.par.phscrollbar = False
+ui.par.crop = False
+ui.par.fit = False
+ui.par.spacing = 2
+ui.par.marginl = 8
+ui.par.marginr = 8
+ui.par.margint = 6
+ui.par.marginb = 6
+ui.par.w = 520
+ui.par.h = 820
+ui.par.hmode = "fixed"
+ui.par.vmode = "fixed"
+ui.par.fixedaspect = False
+ui.par.bgcolorr = 0.1
+ui.par.bgcolorg = 0.11
+ui.par.bgcolorb = 0.14
+ui.par.bgalpha = 1
+ui.par.display = True
+ui.par.enable = True
+
+# --- Ensure HUD nodes + refresh layout wiring ---
+exec(
+    compile(
+        f'INSTANCE = "{INSTANCE}"\n' + open(f"{REPO}/build_vidout_combine.py", encoding="utf-8").read(),
+        f"{REPO}/build_vidout_combine.py",
+        "exec",
+    )
+)
+
+sync_dat.module.push_params(force=True)
+print(f"Upgraded {ctrl.path} + {ui.path} (instance {profile.label}).")

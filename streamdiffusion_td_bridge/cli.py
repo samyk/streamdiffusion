@@ -5,12 +5,13 @@ import asyncio
 
 from .bridge import BridgeApp
 from .config import PRESETS, BridgeConfig
+from .defaults import HAL_BRIDGE_LAUNCH_DEFAULTS as D
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="StreamDiffusion TouchDesigner bridge")
-    parser.add_argument("--width", type=int, default=512)
-    parser.add_argument("--height", type=int, default=512)
+    parser.add_argument("--width", type=int, default=D["width"])
+    parser.add_argument("--height", type=int, default=D["height"])
     parser.add_argument("--input-name", default="td_streamdiffusion_in")
     parser.add_argument("--output-name", default="streamdiffusion_out")
     parser.add_argument("--control-host", default="0.0.0.0")
@@ -18,17 +19,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--daydream-host", default="0.0.0.0")
     parser.add_argument("--daydream-port", type=int, default=8780)
     parser.add_argument("--stream-id", default="remote-1")
-    parser.add_argument("--preset", choices=sorted(PRESETS), default="sd_turbo_fast")
-    parser.add_argument("--prompt", default="")
-    parser.add_argument("--negative-prompt", default="")
-    parser.add_argument("--guidance-scale", type=float, default=1.1)
-    parser.add_argument("--delta", type=float, default=1.0)
-    parser.add_argument("--seed", type=int, default=2)
+    parser.add_argument("--preset", choices=sorted(PRESETS), default=D["preset"])
+    parser.add_argument("--prompt", default=D["prompt"])
+    parser.add_argument("--negative-prompt", default=D["negative_prompt"])
+    parser.add_argument("--guidance-scale", type=float, default=D["guidance_scale"])
+    parser.add_argument("--delta", type=float, default=D["delta"])
+    parser.add_argument("--seed", type=int, default=D["seed"])
     parser.add_argument("--engine-dir", default="engines")
     parser.add_argument(
         "--acceleration",
         choices=["none", "xformers", "tensorrt"],
-        default=None,
+        default=D["acceleration"],
         help="Override preset acceleration. Use xformers if TensorRT install/engine build fails.",
     )
     parser.add_argument("--video-backend", choices=["ndi", "mock"], default="ndi")
@@ -39,13 +40,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--upscale",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=D["upscale_enabled"],
         help="Upscale inference output on GPU before NDI send (Real-ESRGAN or bicubic fallback).",
     )
     parser.add_argument(
         "--upscale-factor",
         type=int,
-        default=2,
+        default=D["upscale_factor"],
         choices=[1, 2, 4],
         help="Upscale multiplier for NDI output (default: 2).",
     )
@@ -57,18 +59,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--upscale-method",
         choices=["bicubic", "realesrgan", "maxine-vsr"],
-        default="maxine-vsr",
+        default=D["upscale_method"],
         help="maxine-vsr (NVIDIA, fast), realesrgan (sharp/slow), bicubic (fastest).",
     )
     parser.add_argument(
         "--upscale-half",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=D["upscale_half"],
         help="Use fp16 Real-ESRGAN when supported (default: on).",
     )
     parser.add_argument(
         "--upscale-maxine-quality",
-        default="medium",
+        default=D["upscale_maxine_quality"],
         choices=[
             "low",
             "medium",
@@ -90,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--flux-transformer-engine",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=D["flux_transformer_engine"],
         help="FLUX.2 Klein: compile transformer with bfloat16 on Blackwell (default: on).",
     )
     return parser

@@ -161,7 +161,11 @@ class StreamWorker:
 
         if ctype == "set_guidance_scale":
             self.guidance_scale = float(command["value"])
-            self._prepare_current_prompt()
+            if not is_flux_preset(
+                pipeline=self.active_preset.pipeline,
+                name=self.active_preset.name,
+            ):
+                self._prepare_current_prompt()
             self.state.update(guidance_scale=self.guidance_scale)
             return
 
@@ -344,7 +348,7 @@ class StreamWorker:
 
     def _update_t_index_list(self, t_index_list: list[int]) -> None:
         if not self._valid_t_index_list(t_index_list):
-            self._ignore_td("t_index_list", t_index_list, "expected 1-4 steps in range 1-49")
+            self._ignore_td("t_index_list", t_index_list, "invalid t_index_list for active preset")
             return
         if t_index_list == list(self.active_preset.t_index_list):
             return
@@ -395,7 +399,6 @@ class StreamWorker:
         )
         try:
             self.wrapper.reconfigure_batch(t_index_list, requested)
-            self._prepare_current_prompt()
         except Exception as exc:  # noqa: BLE001
             self._ignore_td("stream_batch", (t_index_list, requested), f"{type(exc).__name__}: {exc}")
             return False
@@ -409,8 +412,17 @@ class StreamWorker:
         print(f"[stream_worker] ignoring TD {key}={value!r}: {reason}")
 
     def _valid_t_index_list(self, t_index_list: list[int]) -> bool:
-        if not t_index_list or len(t_index_list) > 4:
+        if not t_index_list:
             return False
+        flux = is_flux_preset(
+            pipeline=self.active_preset.pipeline,
+            name=self.active_preset.name,
+        )
+        max_len = 6 if flux else 4
+        if len(t_index_list) > max_len:
+            return False
+        if flux:
+            return all(1 <= int(v) <= 6 for v in t_index_list)
         return all(1 <= int(v) <= 49 for v in t_index_list)
 
     def _valid_frame_buffer_request(
@@ -428,6 +440,13 @@ class StreamWorker:
         if len(steps) <= 1 and requested > 1:
             return False
         return True
+
+    def _t_index_plausible_for_preset(self, preset: ModelPreset, t_index_list: list[int]) -> bool:
+        if not t_index_list:
+            return False
+        if is_flux_preset(pipeline=preset.pipeline, name=preset.name):
+            return 1 <= len(t_index_list) <= 6
+        return min(int(v) for v in t_index_list) >= 15
 
     def _apply_load_model(self, command: dict[str, Any]) -> bool:
         """Apply load_model only when something valid actually requires a reload."""
@@ -452,17 +471,33 @@ class StreamWorker:
                 if command.get("t_index_list") and not self._valid_t_index_list(
                     [int(v) for v in t_index_list]
                 ):
-                    self._ignore_td("t_index_list", t_index_list, "expected 1-4 steps in range 1-49")
+                    self._ignore_td("t_index_list", t_index_list, "invalid t_index_list for active preset")
                     t_index_list = previous_t_index
-                if (
-                    preset_name != self.active_preset.name
-                    or next_preset.model_id_or_path != self.active_preset.model_id_or_path
-                    or list(t_index_list) != list(self.active_preset.t_index_list)
+                proposed = [int(v) for v in t_index_list]
+                if preset_name != self.active_preset.name and not self._t_index_plausible_for_preset(
+                    next_preset, proposed
                 ):
+                    t_index_list = list(next_preset.t_index_list)
+                    print(
+                        f"[stream_worker] preset {preset_name!r}: resetting t_index_list "
+                        f"from {proposed} to {list(t_index_list)}"
+                    )
+                if preset_name != self.active_preset.name or next_preset.model_id_or_path != self.active_preset.model_id_or_path:
                     self.active_preset = replace(
                         next_preset,
                         t_index_list=[int(v) for v in t_index_list],
                     )
+                    reload_needed = True
+                elif list(t_index_list) != list(self.active_preset.t_index_list):
+                    self.active_preset = replace(
+                        next_preset,
+                        t_index_list=[int(v) for v in t_index_list],
+                    )
+                    if self.wrapper is not None and self._reconfigure_streamdiffusion_batch(
+                        [int(v) for v in t_index_list],
+                        self.config.frame_buffer_size,
+                    ):
+                        return False
                     reload_needed = True
         elif command.get("model"):
             pipeline = command.get("pipeline")
@@ -470,7 +505,7 @@ class StreamWorker:
                 pipeline = "flux2_klein"
             t_index_list = list(command.get("t_index_list", self.active_preset.t_index_list))
             if command.get("t_index_list") and not self._valid_t_index_list(t_index_list):
-                self._ignore_td("t_index_list", t_index_list, "expected 1-4 steps in range 1-49")
+                self._ignore_td("t_index_list", t_index_list, "invalid t_index_list for active preset")
                 t_index_list = list(self.active_preset.t_index_list)
             next_preset = replace(
                 self.active_preset,
@@ -541,7 +576,6 @@ class StreamWorker:
         return (
             self.active_preset.name,
             self.active_preset.model_id_or_path,
-            tuple(self.active_preset.t_index_list),
             self._effective_frame_buffer_size(),
             self.config.width,
             self.config.height,
@@ -598,12 +632,18 @@ class StreamWorker:
                 width=self.config.width,
                 height=self.config.height,
                 frame_buffer_size=frame_buffer_size,
-                guidance_scale=self.guidance_scale,
+                guidance_scale=1.0,
                 seed=self.seed,
                 flux_transformer_engine=self.config.flux_transformer_engine,
                 warmup=self.active_preset.warmup,
             )
         self.wrapper = wrapper_cls(**wrapper_kwargs)
+        print(
+            f"[stream_worker] loaded {self.active_preset.name} "
+            f"({self.active_preset.model_id_or_path}) "
+            f"{self.config.width}x{self.config.height} "
+            f"t_index={list(self.active_preset.t_index_list)}"
+        )
         self._prepare_current_prompt()
         self._apply_prompt_embeddings()
         self._needs_reload = False

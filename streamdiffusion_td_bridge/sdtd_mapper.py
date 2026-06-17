@@ -202,7 +202,11 @@ def daydream_params_to_commands(
         )
 
     if _field_changed(params, previous, "guidance_scale"):
-        commands.append({"type": "set_guidance_scale", "value": float(params["guidance_scale"])})
+        preset = _resolve_preset(params) or str(
+            (previous or {}).get("preset", "")
+        )
+        if not (preset and preset.startswith("flux2_klein")):
+            commands.append({"type": "set_guidance_scale", "value": float(params["guidance_scale"])})
 
     if _field_changed(params, previous, "delta"):
         commands.append({"type": "set_delta", "value": float(params["delta"])})

@@ -4,10 +4,10 @@ TEXT_LIFT_PX = 36
 TEXT_FONT_BASE = 28.0
 TEXT_LINE_HEIGHT = 1.35
 TEXT_CHAR_WIDTH = 0.55
-FPS_FONT_BASE = 16.0
-FPS_MARGIN_PX = 12
+FPS_FONT_BASE = 22.0
+FPS_MARGIN_PX = 16
 
-_ndi_fps_state: dict[str, dict] = {}
+_hal_poll_state: dict[str, dict] = {}
 
 
 def _hal_control_for(vidout_path):
@@ -53,29 +53,45 @@ def _display_pars(vidout_path):
     return None
 
 
-def _ndi_receive_fps(ndi_top) -> float:
-    if ndi_top is None:
+def _hal_output_fps(vidout_path) -> float:
+    import json
+    import urllib.error
+    import urllib.request
+
+    ctrl = _hal_control_for(vidout_path)
+    if ctrl is None:
         return 0.0
-    key = ndi_top.path
-    state = _ndi_fps_state.setdefault(
-        key, {"last_count": None, "last_t": None, "fps": 0.0}
-    )
-    count = int(getattr(ndi_top, "totalCooks", 0))
+    state = _hal_poll_state.setdefault(vidout_path, {"at": 0.0, "fps": 0.0})
     now = absTime.seconds
-    if state["last_count"] is not None and count > state["last_count"]:
-        dt = now - (state["last_t"] or now)
-        if dt > 0.0005:
-            instant = (count - state["last_count"]) / dt
-            if state["fps"] > 0:
-                state["fps"] = state["fps"] * 0.85 + instant * 0.15
-            else:
-                state["fps"] = instant
-    state["last_count"] = count
-    state["last_t"] = now
+    if now - state["at"] < 0.75:
+        return float(state["fps"])
+    host = ctrl.par.Remotehost.eval().strip() if hasattr(ctrl.par, "Remotehost") else "127.0.0.1"
+    port = int(ctrl.par.Remoteport) if hasattr(ctrl.par, "Remoteport") else 8780
+    stream = (
+        ctrl.par.Streamid.eval().strip() if hasattr(ctrl.par, "Streamid") else "remote-1"
+    ) or "remote-1"
+    url = f"http://{host}:{port}/v1/streams/{stream}"
+    try:
+        with urllib.request.urlopen(url, timeout=0.5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        state["fps"] = float(payload.get("runtime", {}).get("fps_out", 0.0))
+    except (urllib.error.URLError, ValueError, TypeError):
+        pass
+    state["at"] = now
     return float(state["fps"])
 
 
-def _configure_text_top(text_top, *, text, out_w, out_h, font_size, alignx, aligny):
+def _configure_text_top(
+    text_top,
+    *,
+    text,
+    out_w,
+    out_h,
+    font_size,
+    alignx,
+    aligny,
+    hud=False,
+):
     text_top.par.text = text
     text_top.par.alignx = alignx
     text_top.par.aligny = aligny
@@ -89,10 +105,26 @@ def _configure_text_top(text_top, *, text, out_w, out_h, font_size, alignx, alig
     text_top.par.linespacing = max(2.0, font_size * 0.12)
     text_top.par.linespacingunit = "points"
     text_top.par.keepfontratio = True
-    text_top.par.fontcolorr = 1
-    text_top.par.fontcolorg = 1
-    text_top.par.fontcolorb = 1
-    text_top.par.fontalpha = 1
+    if hud:
+        text_top.par.fontcolorr = 0.2
+        text_top.par.fontcolorg = 1.0
+        text_top.par.fontcolorb = 0.35
+        text_top.par.fontalpha = 1
+        if hasattr(text_top.par, "bgcolorr"):
+            text_top.par.bgcolorr = 0.0
+            text_top.par.bgcolorg = 0.0
+            text_top.par.bgcolorb = 0.0
+            text_top.par.bgalpha = 0.72
+        if hasattr(text_top.par, "borderar"):
+            text_top.par.borderar = 0.0
+            text_top.par.borderag = 0.0
+            text_top.par.borderab = 0.0
+            text_top.par.borderaalpha = 0.0
+    else:
+        text_top.par.fontcolorr = 1
+        text_top.par.fontcolorg = 1
+        text_top.par.fontcolorb = 1
+        text_top.par.fontalpha = 1
     text_top.par.resolutionw = int(out_w)
     text_top.par.resolutionh = int(out_h)
 
@@ -160,23 +192,47 @@ def update_layout(vidout_path="/project1/vidout"):
         comp2.par.tx = 0
         comp2.par.ty = text_lift
 
-    fps = _ndi_receive_fps(op(f"{vidout_path}/ndiin2"))
+    hal_fps = _hal_output_fps(vidout_path)
     text_fps = combine.op("text_fps")
+    fps_xform = combine.op("fps_xform")
     comp_hud = combine.op("comp_hud")
     if text_fps is not None:
-        fps_label = f"NDI {fps:.1f} fps" if fps > 0 else "NDI -- fps"
-        fps_font = max(10.0, FPS_FONT_BASE)
+        fps_label = str(round(hal_fps))
+        fps_font = max(14.0, FPS_FONT_BASE)
+        hud_w = max(48, int(fps_font * 2.2))
+        hud_h = max(40, int(fps_font * 1.6))
         _configure_text_top(
             text_fps,
             text=fps_label,
-            out_w=max(180, int(out_w * 0.25)),
-            out_h=36,
+            out_w=hud_w,
+            out_h=hud_h,
             font_size=fps_font,
             alignx="left",
-            aligny="bottom",
+            aligny="center",
+            hud=True,
         )
-    if comp_hud is not None:
+        if fps_xform is not None:
+            fps_xform.inputConnectors[0].connect(text_fps)
+            fps_xform.par.bgcolora = 0
+            fps_xform.par.px = FPS_MARGIN_PX
+            fps_xform.par.py = FPS_MARGIN_PX
+            fps_xform.par.punit = "pixels"
+            fps_xform.par.tunit = "pixels"
+            fps_xform.par.sx = 1
+            fps_xform.par.sy = 1
+            hud_input = fps_xform
+        else:
+            hud_input = text_fps
+    else:
+        hud_input = None
+
+    if comp_hud is not None and hud_input is not None:
+        if not comp_hud.inputs or comp_hud.inputs[0] is not hud_input:
+            comp_hud.inputConnectors[0].connect(hud_input)
+        comp_hud.par.operand = "over"
+        comp_hud.par.size = "input2"
+        comp_hud.par.prefit = "nativeres"
         comp_hud.par.justifyh = "left"
         comp_hud.par.justifyv = "bottom"
-        comp_hud.par.tx = FPS_MARGIN_PX
-        comp_hud.par.ty = FPS_MARGIN_PX
+        comp_hud.par.tx = 0
+        comp_hud.par.ty = 0

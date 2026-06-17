@@ -1,4 +1,7 @@
-"""Instance profiles for parallel StreamDiffusion + NDI pipelines."""
+"""Instance profiles for parallel StreamDiffusion + NDI pipelines.
+
+Connection defaults for instance A match streamdiffusion_td_bridge/defaults.py.
+"""
 
 from __future__ import annotations
 

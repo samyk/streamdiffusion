@@ -8,6 +8,9 @@ REMOTE_PORT = 8780
 STREAM_ID = "remote-1"
 
 _last_payload = None
+_last_prompt = None
+_last_push_at = 0.0
+_push_debounce_s = 0.35
 
 
 def _control():
@@ -30,13 +33,49 @@ def _stream_id():
     return STREAM_ID
 
 
+def _klein_steps(denoise, step2=0, step3=0, step4=0):
+    # Klein: Denoise = step count (1-6). Step2-4 add extra steps when > 0.
+    count = max(1, min(6, int(denoise)))
+    for value in (step2, step3, step4):
+        if int(value) > 0:
+            count += 1
+    count = min(6, count)
+    return list(range(1, count + 1))
+
+
+def _turbo_steps(denoise, step2=0, step3=0, step4=0):
+    steps = [max(1, min(49, int(denoise)))]
+    for value in (step2, step3, step4):
+        if int(value) > 0:
+            steps.append(max(1, min(49, int(value))))
+    return steps
+
+
 def _steps(ctrl):
-    steps = [int(ctrl.par.Denoise)]
-    for name in ("Step2", "Step3", "Step4"):
-        value = int(getattr(ctrl.par, name))
-        if value > 0:
-            steps.append(max(1, min(49, value)))
-    return steps or [35]
+    preset = ctrl.par.Preset.eval() if hasattr(ctrl.par, "Preset") else ""
+    denoise = int(ctrl.par.Denoise)
+    step2 = int(ctrl.par.Step2)
+    step3 = int(ctrl.par.Step3)
+    step4 = int(ctrl.par.Step4)
+    flux_presets = {"flux2_klein_fast", "flux2_klein_quality", "flux2_klein_9b"}
+    preset_steps = {
+        "sdxl_turbo_fast": [35],
+        "sdxl_turbo_quality": [32, 45],
+        "sd_turbo_fast": [35],
+        "sd_turbo_quality": [32, 45],
+        "lcm_lora_style": [0, 16, 32, 45],
+        "flux2_klein_fast": [1, 2, 3, 4],
+        "flux2_klein_quality": [1, 2, 3, 4, 5, 6],
+        "flux2_klein_9b": [1, 2, 3, 4],
+    }
+    if preset in flux_presets:
+        return _klein_steps(denoise, step2, step3, step4)
+    steps = _turbo_steps(denoise, step2, step3, step4)
+    if not steps:
+        return preset_steps.get(preset, [35])
+    if preset != "lcm_lora_style" and min(steps) < 15:
+        return [max(15, int(v)) for v in steps]
+    return steps
 
 
 def _prompts(ctrl):
@@ -68,13 +107,9 @@ def build_params():
 
     model_id = ctrl.par.Modelid.eval().strip() if hasattr(ctrl.par, "Modelid") else ""
     preset = ctrl.par.Preset.eval() if hasattr(ctrl.par, "Preset") else ""
-    quality_mode = ctrl.par.Qualitymode.eval() if hasattr(ctrl.par, "Qualitymode") else "fast"
-    if quality_mode == "quality" and preset.endswith("_fast"):
-        preset = preset.replace("_fast", "_quality")
 
     params = {
         "preset": preset,
-        "quality_mode": quality_mode,
         "prompts": _prompts(ctrl),
         "negative_prompt": ctrl.par.Negativeprompt.eval()
         if hasattr(ctrl.par, "Negativeprompt")
@@ -149,13 +184,20 @@ def build_params():
 
 
 def push_params(force=False):
-    global _last_payload
+    global _last_payload, _last_push_at
+    import time
+
+    now = time.monotonic()
+    if not force and now - _last_push_at < _push_debounce_s:
+        return
+
     params = build_params()
     payload = {"pipeline": "streamdiffusion", "params": params}
     encoded = json.dumps(payload, sort_keys=True)
     if not force and encoded == _last_payload:
         return
     _last_payload = encoded
+    _last_push_at = now
 
     url = f"{_base_url()}/v1/streams/{_stream_id()}"
     request = urllib.request.Request(
@@ -191,6 +233,16 @@ def onValueChange(par, prev):
         _update_combine_layout()
         return
 
+    if par.name == "Prompt":
+        global _last_prompt
+        ctrl = _control()
+        if ctrl is None:
+            return
+        text = ctrl.par.Prompt.eval().strip()
+        if text == _last_prompt:
+            return
+        _last_prompt = text
+
     tokens = (
         "prompt",
         "negative",
@@ -200,7 +252,6 @@ def onValueChange(par, prev):
         "delta",
         "seed",
         "preset",
-        "quality",
         "modelid",
         "acceleration",
         "sdmode",

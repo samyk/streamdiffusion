@@ -17,6 +17,7 @@ REPO = "/Users/samy/c/touch/samysd/touchdesigner"
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 from hal_control_defs import (
+    HAL_SYNC_PARSCOPE,
     TD_HAL_DEFAULTS,
     UPSCALE_FACTOR_LABELS,
     UPSCALE_FACTOR_NAMES,
@@ -24,7 +25,6 @@ from hal_control_defs import (
     UPSCALE_MAXINE_QUALITY_NAMES,
     UPSCALE_METHOD_LABELS,
     UPSCALE_METHOD_NAMES,
-    apply_td_hal_defaults,
 )
 from instances import get_instance
 
@@ -64,9 +64,9 @@ pg.appendPulse("Pushall", label="Push All")
 # --- Prompt ---
 pg = ctrl.appendCustomPage("Prompt")
 pg.appendStr("Prompt", label="Prompt")
-ctrl.par.Prompt = "cybernetic botanical glass sculpture"
+ctrl.par.Prompt = TD_HAL_DEFAULTS["Prompt"]
 pg.appendStr("Negativeprompt", label="Negative Prompt")
-ctrl.par.Negativeprompt = "blurry, low detail, artifacts, watermark"
+ctrl.par.Negativeprompt = TD_HAL_DEFAULTS["Negativeprompt"]
 pg.appendStr("Prompt2", label="Prompt 2")
 ctrl.par.Prompt2 = ""
 pg.appendFloat("Prompt2weight", label="Prompt 2 Weight")
@@ -78,11 +78,15 @@ ctrl.par.Promptinterp = "average"
 
 # --- Denoise ---
 pg = ctrl.appendCustomPage("Denoise")
-denoise = pg.appendInt("Denoise", label="Step 1 (1-49)")
+denoise = pg.appendInt("Denoise", label="Steps (Klein 1-6) / T-index 1 (Turbo 1-49)")
 denoise.normMin = 1
 denoise.normMax = 49
 ctrl.par.Denoise = TD_HAL_DEFAULTS["Denoise"]
-for name, label in (("Step2", "Step 2 (0=off)"), ("Step3", "Step 3"), ("Step4", "Step 4")):
+for name, label in (
+    ("Step2", "Extra step (Klein) / T-index 2 (Turbo, 0=off)"),
+    ("Step3", "Extra step (Klein) / T-index 3 (Turbo)"),
+    ("Step4", "Extra step (Klein) / T-index 4 (Turbo)"),
+):
     step = pg.appendInt(name, label=label)
     step.normMin = 0
     step.normMax = 49
@@ -114,20 +118,16 @@ ctrl.par.Preset.menuLabels = [
     "Passthrough",
 ]
 ctrl.par.Preset = TD_HAL_DEFAULTS["Preset"]
-pg.appendMenu("Qualitymode", label="Quality Mode")
-ctrl.par.Qualitymode.menuNames = ["fast", "quality"]
-ctrl.par.Qualitymode.menuLabels = ["Fast", "Quality"]
-ctrl.par.Qualitymode = TD_HAL_DEFAULTS["Qualitymode"]
 pg.appendStr("Modelid", label="Custom Model (HF id or .safetensors)")
 ctrl.par.Modelid = ""
 pg.appendMenu("Sdmode", label="Mode")
 ctrl.par.Sdmode.menuNames = ["img2img", "txt2img", "v2v", "passthrough"]
 ctrl.par.Sdmode.menuLabels = ["img2img", "txt2img", "v2v (TRT only)", "passthrough"]
-ctrl.par.Sdmode = "img2img"
+ctrl.par.Sdmode = TD_HAL_DEFAULTS["Sdmode"]
 pg.appendMenu("Acceleration", label="Acceleration")
 ctrl.par.Acceleration.menuNames = ["none", "xformers", "tensorrt"]
 ctrl.par.Acceleration.menuLabels = ["none (Blackwell)", "xformers", "tensorrt"]
-ctrl.par.Acceleration = "none"
+ctrl.par.Acceleration = TD_HAL_DEFAULTS["Acceleration"]
 
 # --- Quality ---
 pg = ctrl.appendCustomPage("Quality")
@@ -201,9 +201,9 @@ pg = ctrl.appendCustomPage("Advanced")
 flt = pg.appendFloat("Filterthreshold", label="Similar Filter (0=off)")
 flt.normMin = 0
 flt.normMax = 0.99
-ctrl.par.Filterthreshold = 0
+ctrl.par.Filterthreshold = TD_HAL_DEFAULTS["Filterthreshold"]
 pg.appendInt("Filterskip", label="Similar Filter Max Skip")
-ctrl.par.Filterskip = 10
+ctrl.par.Filterskip = TD_HAL_DEFAULTS["Filterskip"]
 pg.appendToggle("Pausestream", label="Pause / Passthrough")
 ctrl.par.Pausestream = False
 pg.appendStr("Ipimagepath", label="IP-Adapter Image Path (TRT only)")
@@ -222,7 +222,8 @@ readme.text = (
     f"HAL remote control for StreamDiffusion bridge (instance {profile.label}).\n"
     f"NDI send: {profile.ndi_out} | return: {profile.ndi_in}\n"
     f"Control: REST PATCH to {REMOTE_HOST}:{REMOTE_PORT}/v1/streams/{STREAM_ID}\n"
-    "SDXL-Turbo default. IP-Adapter / ControlNet / V2V need TensorRT (not on Blackwell yet).\n"
+    f"Default: {TD_HAL_DEFAULTS['Preset']} @ {TD_HAL_DEFAULTS['Width']}x{TD_HAL_DEFAULTS['Height']}, "
+    f"denoise {TD_HAL_DEFAULTS['Denoise']}, tiny VAE on, 2x Maxine upscale.\n"
 )
 
 sync_dat = parent.create("textDAT", f"hal_remote_sync{profile.suffix}")
@@ -259,7 +260,7 @@ parexec.par.valuechange = True
 parexec.par.onpulse = True
 parexec.par.custom = True
 parexec.par.builtin = False
-parexec.par.pars = "*"
+parexec.par.pars = HAL_SYNC_PARSCOPE
 
 # Disable legacy paths
 for path in (

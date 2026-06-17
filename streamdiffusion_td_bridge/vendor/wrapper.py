@@ -180,6 +180,137 @@ class StreamDiffusionWrapper:
             stream.trt_unet_batch_size = frame_buffer_size
             stream.batch_size = frame_buffer_size
 
+        self._rebuild_stream_schedule(stream)
+
+    @staticmethod
+    def _resize_batch_tensor(
+        tensor: torch.Tensor | None,
+        batch_size: int,
+        stream: StreamDiffusion,
+        *,
+        fill_zeros: bool = False,
+    ) -> torch.Tensor:
+        target_shape = (batch_size, 4, stream.latent_height, stream.latent_width)
+        if tensor is not None and tuple(tensor.shape) == target_shape:
+            return tensor
+        if tensor is None or tensor.shape[0] == 0:
+            if fill_zeros:
+                return torch.zeros(target_shape, dtype=stream.dtype, device=stream.device)
+            generator = stream.generator
+            return torch.randn(
+                target_shape,
+                generator=generator,
+                device=stream.device,
+                dtype=stream.dtype,
+            )
+        if tensor.shape[0] < batch_size:
+            extra = batch_size - tensor.shape[0]
+            pad = (
+                torch.zeros(
+                    (extra, 4, stream.latent_height, stream.latent_width),
+                    dtype=tensor.dtype,
+                    device=tensor.device,
+                )
+                if fill_zeros
+                else tensor[-1:].repeat(extra, 1, 1, 1)
+            )
+            return torch.cat([tensor, pad], dim=0)
+        return tensor[:batch_size]
+
+    def _rebuild_stream_schedule(self, stream: StreamDiffusion) -> None:
+        """Rebuild timestep/batch tensors after t_index changes (no prompt re-encode)."""
+        old_init = getattr(stream, "init_noise", None)
+        old_stock = getattr(stream, "stock_noise", None)
+        old_embeds = getattr(stream, "prompt_embeds", None)
+
+        if stream.denoising_steps_num > 1:
+            stream.x_t_latent_buffer = torch.zeros(
+                (
+                    (stream.denoising_steps_num - 1) * stream.frame_bff_size,
+                    4,
+                    stream.latent_height,
+                    stream.latent_width,
+                ),
+                dtype=stream.dtype,
+                device=stream.device,
+            )
+        else:
+            stream.x_t_latent_buffer = None
+
+        if old_embeds is not None and old_embeds.shape[0] != stream.batch_size:
+            stream.prompt_embeds = old_embeds[:1].repeat(stream.batch_size, 1, 1)
+
+        stream.scheduler.set_timesteps(50, stream.device)
+        stream.timesteps = stream.scheduler.timesteps.to(stream.device)
+
+        stream.sub_timesteps = [stream.timesteps[t] for t in stream.t_list]
+        sub_timesteps_tensor = torch.tensor(
+            stream.sub_timesteps,
+            dtype=torch.long,
+            device=stream.device,
+        )
+        stream.sub_timesteps_tensor = torch.repeat_interleave(
+            sub_timesteps_tensor,
+            repeats=stream.frame_bff_size if stream.use_denoising_batch else 1,
+            dim=0,
+        )
+
+        stream.init_noise = self._resize_batch_tensor(old_init, stream.batch_size, stream)
+        stream.stock_noise = self._resize_batch_tensor(
+            old_stock,
+            stream.batch_size,
+            stream,
+            fill_zeros=True,
+        )
+
+        c_skip_list = []
+        c_out_list = []
+        for timestep in stream.sub_timesteps:
+            c_skip, c_out = stream.scheduler.get_scalings_for_boundary_condition_discrete(
+                timestep
+            )
+            c_skip_list.append(c_skip)
+            c_out_list.append(c_out)
+
+        stream.c_skip = (
+            torch.stack(c_skip_list)
+            .view(len(stream.t_list), 1, 1, 1)
+            .to(dtype=stream.dtype, device=stream.device)
+        )
+        stream.c_out = (
+            torch.stack(c_out_list)
+            .view(len(stream.t_list), 1, 1, 1)
+            .to(dtype=stream.dtype, device=stream.device)
+        )
+
+        alpha_prod_t_sqrt_list = []
+        beta_prod_t_sqrt_list = []
+        for timestep in stream.sub_timesteps:
+            alpha_prod_t_sqrt_list.append(stream.scheduler.alphas_cumprod[timestep].sqrt())
+            beta_prod_t_sqrt_list.append(
+                (1 - stream.scheduler.alphas_cumprod[timestep]).sqrt()
+            )
+        alpha_prod_t_sqrt = (
+            torch.stack(alpha_prod_t_sqrt_list)
+            .view(len(stream.t_list), 1, 1, 1)
+            .to(dtype=stream.dtype, device=stream.device)
+        )
+        beta_prod_t_sqrt = (
+            torch.stack(beta_prod_t_sqrt_list)
+            .view(len(stream.t_list), 1, 1, 1)
+            .to(dtype=stream.dtype, device=stream.device)
+        )
+        stream.alpha_prod_t_sqrt = torch.repeat_interleave(
+            alpha_prod_t_sqrt,
+            repeats=stream.frame_bff_size if stream.use_denoising_batch else 1,
+            dim=0,
+        )
+        stream.beta_prod_t_sqrt = torch.repeat_interleave(
+            beta_prod_t_sqrt,
+            repeats=stream.frame_bff_size if stream.use_denoising_batch else 1,
+            dim=0,
+        )
+
     def __call__(self, image: str | Image.Image | torch.Tensor | None = None, prompt: str | None = None):
         if self.mode == "img2img":
             return self.img2img(image, prompt)

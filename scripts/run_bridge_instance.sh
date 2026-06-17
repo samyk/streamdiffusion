@@ -13,10 +13,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/bridge_settings.sh"
 
 INSTANCE="${1:-a}"
-PROMPT="${2:-cybernetic botanical glass sculpture}"
+PROMPT="${2:-}"
 ROOT="$(sdtd_bridge_root)"
 
 sdtd_resolve_instance "${INSTANCE}" "${PROMPT}"
+PROMPT="${SDTD_RESOLVED_PROMPT}"
 
 SESSION="${SDTD_RESOLVED_SESSION}"
 INPUT_NAME="${SDTD_RESOLVED_INPUT_NAME}"

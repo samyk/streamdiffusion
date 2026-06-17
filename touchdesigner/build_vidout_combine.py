@@ -156,7 +156,7 @@ if text_fps is None or text_fps.OPType != "textTOP":
     if text_fps:
         text_fps.destroy()
     text_fps = COMBINE.create("textTOP", "text_fps")
-text_fps.par.text = "NDI -- fps"
+text_fps.par.text = "0"
 text_fps.par.alignx = "left"
 text_fps.par.aligny = "bottom"
 text_fps.par.outputresolution = "custom"
@@ -167,20 +167,36 @@ text_fps.par.fontcolorb = 1
 text_fps.par.keepfontratio = True
 _place(text_fps, 320, 200)
 
+fps_xform = COMBINE.op("fps_xform")
+if fps_xform is None or fps_xform.OPType != "transformTOP":
+    if fps_xform:
+        fps_xform.destroy()
+    fps_xform = COMBINE.create("transformTOP", "fps_xform")
+fps_xform.inputConnectors[0].connect(text_fps)
+fps_xform.par.bgcolora = 0
+fps_xform.par.px = 16
+fps_xform.par.py = 16
+fps_xform.par.punit = "pixels"
+fps_xform.par.tunit = "pixels"
+fps_xform.par.sx = 1
+fps_xform.par.sy = 1
+_place(fps_xform, 410, 200)
+
 comp_hud = COMBINE.op("comp_hud")
 if comp_hud is None or comp_hud.OPType != "compositeTOP":
     if comp_hud:
         comp_hud.destroy()
     comp_hud = COMBINE.create("compositeTOP", "comp_hud")
-comp_hud.inputConnectors[0].connect(text_fps)
+comp_hud.inputConnectors[0].connect(fps_xform)
 comp_hud.inputConnectors[1].connect(finull)
 comp_hud.par.operand = "over"
 comp_hud.par.size = "input2"
 comp_hud.par.prefit = "nativeres"
 comp_hud.par.justifyh = "left"
 comp_hud.par.justifyv = "bottom"
-comp_hud.par.tx = 12
-comp_hud.par.ty = 12
+comp_hud.par.tx = 0
+comp_hud.par.ty = 0
+comp_hud.par.prefit = "nativeres"
 _place(comp_hud, 500, 200)
 
 out1 = COMBINE.op("out1")

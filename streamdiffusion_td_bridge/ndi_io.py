@@ -144,7 +144,7 @@ class NdiVideoInput:
             if self.receiver is None:
                 raise NdiError(f"Could not create NDI receiver for {source.ndi_name}")
         else:
-            self.ndi.recv_connect(self.receiver, source, None, 1000)
+            self.ndi.recv_connect(self.receiver, source)
         self._connected_ndi_name = source.ndi_name
         self._last_reconnect_at = time.monotonic()
         print(f"[ndi] input connected: {source.ndi_name}")

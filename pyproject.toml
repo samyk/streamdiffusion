@@ -29,6 +29,12 @@ upscaler = [
   "spandrel",
   "nvidia-vfx",
 ]
+flux2 = [
+  "accelerate>=1.4",
+  "safetensors",
+  "sentencepiece",
+  "protobuf",
+]
 dev = [
   "ruff",
 ]

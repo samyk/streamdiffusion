@@ -36,8 +36,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PROMPT_A="${ARGS[0]:-cybernetic botanical glass sculpture}"
-PROMPT_B="${ARGS[1]:-${SDTD_PROMPT_B:-coral reef person covered in anemones and fish}}"
+PROMPT_A="${ARGS[0]:-}"
+PROMPT_B="${ARGS[1]:-${SDTD_PROMPT_B:-}}"
 
 echo "Launching sdtd-bridge from ${ROOT}"
 echo "========== bridge settings =========="

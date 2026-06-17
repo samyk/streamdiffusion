@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from .defaults import HAL_BRIDGE_LAUNCH_DEFAULTS
+
+_defaults = HAL_BRIDGE_LAUNCH_DEFAULTS
+
 
 Mode = Literal["passthrough", "img2img", "txt2img", "v2v"]
 Acceleration = Literal["none", "xformers", "tensorrt"]
@@ -134,8 +138,8 @@ PRESETS: dict[str, ModelPreset] = {
 
 @dataclass
 class BridgeConfig:
-    width: int = 512
-    height: int = 512
+    width: int = _defaults["width"]
+    height: int = _defaults["height"]
     input_name: str | None = "td_streamdiffusion_in"
     output_name: str = "streamdiffusion_out"
     control_host: str = "0.0.0.0"
@@ -143,23 +147,23 @@ class BridgeConfig:
     daydream_host: str = "0.0.0.0"
     daydream_port: int = 8780
     stream_id: str = "remote-1"
-    preset: str = "sd_turbo_fast"
-    prompt: str = ""
-    negative_prompt: str = ""
-    guidance_scale: float = 1.1
-    delta: float = 1.0
-    seed: int = 2
+    preset: str = _defaults["preset"]
+    prompt: str = _defaults["prompt"]
+    negative_prompt: str = _defaults["negative_prompt"]
+    guidance_scale: float = _defaults["guidance_scale"]
+    delta: float = _defaults["delta"]
+    seed: int = _defaults["seed"]
     engine_dir: str = "engines"
     video_backend: Literal["ndi", "mock"] = "ndi"
     drop_stale_frames: bool = True
-    acceleration: Acceleration | None = None
-    frame_buffer_size: int | None = None
-    flux_transformer_engine: bool = True
-    upscale_enabled: bool = False
-    upscale_factor: int = 2
-    upscale_method: Literal["bicubic", "realesrgan", "maxine-vsr"] = "maxine-vsr"
-    upscale_half: bool = True
-    upscale_maxine_quality: str = "medium"
+    acceleration: Acceleration | None = _defaults["acceleration"]
+    frame_buffer_size: int | None = _defaults["frame_buffer_size"]
+    flux_transformer_engine: bool = _defaults["flux_transformer_engine"]
+    upscale_enabled: bool = _defaults["upscale_enabled"]
+    upscale_factor: int = _defaults["upscale_factor"]
+    upscale_method: Literal["bicubic", "realesrgan", "maxine-vsr"] = _defaults["upscale_method"]
+    upscale_half: bool = _defaults["upscale_half"]
+    upscale_maxine_quality: str = _defaults["upscale_maxine_quality"]
     upscale_model: str | None = None
 
     def effective_frame_buffer_size(self) -> int:
@@ -233,26 +237,26 @@ class BridgeConfig:
 @dataclass
 class RuntimeState:
     status: str = "starting"
-    preset: str = "sd_turbo_fast"
-    mode: Mode = "img2img"
+    preset: str = _defaults["preset"]
+    mode: Mode = _defaults["sdmode"]
     model_id_or_path: str = "stabilityai/sd-turbo"
-    prompt: str = ""
-    negative_prompt: str = ""
-    guidance_scale: float = 1.1
-    delta: float = 1.0
+    prompt: str = _defaults["prompt"]
+    negative_prompt: str = _defaults["negative_prompt"]
+    guidance_scale: float = _defaults["guidance_scale"]
+    delta: float = _defaults["delta"]
     strength: float = 0.55
-    seed: int = 2
-    t_index_list: list[int] = field(default_factory=lambda: [0])
+    seed: int = _defaults["seed"]
+    t_index_list: list[int] = field(default_factory=lambda: list(_defaults["t_index_list"]))
     fps_in: float = 0.0
     fps_out: float = 0.0
     latency_ms: float = 0.0
     last_error: str | None = None
     frame_count: int = 0
     loading: bool = False
-    similar_image_filter_threshold: float = 0.0
-    similar_image_filter_max_skip_frame: int = 10
-    width: int = 512
-    height: int = 512
+    similar_image_filter_threshold: float = _defaults["similar_image_filter_threshold"]
+    similar_image_filter_max_skip_frame: int = _defaults["similar_image_filter_max_skip_frame"]
+    width: int = _defaults["width"]
+    height: int = _defaults["height"]
     extra: dict[str, Any] = field(default_factory=dict)
 
     def snapshot(self) -> dict[str, Any]:
