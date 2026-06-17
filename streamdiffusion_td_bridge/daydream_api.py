@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .frames import SharedState
-from .sdtd_mapper import daydream_params_to_commands
+from .sdtd_mapper import daydream_params_to_commands, normalize_stream_params
 
 
 class DaydreamApiServer:
@@ -151,6 +151,7 @@ class DaydreamApiServer:
         if not params:
             return
         previous = dict(self._params)
+        params = normalize_stream_params(params, previous)
         self._params.update(params)
         for command in daydream_params_to_commands(params, previous=previous):
             self.command_queue.put_nowait(command)

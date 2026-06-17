@@ -152,6 +152,34 @@ class StreamDiffusionWrapper:
             seed=seed,
         )
 
+    def reconfigure_batch(self, t_index_list: list[int], frame_buffer_size: int) -> None:
+        """Hot-update denoise steps / frame buffer without reloading the pipeline."""
+        if not t_index_list:
+            raise ValueError("t_index_list must not be empty")
+        frame_buffer_size = max(1, int(frame_buffer_size))
+        self.frame_buffer_size = frame_buffer_size
+        self.batch_size = (
+            len(t_index_list) * frame_buffer_size
+            if self.use_denoising_batch
+            else frame_buffer_size
+        )
+
+        stream = self.stream
+        stream.t_list = list(t_index_list)
+        stream.denoising_steps_num = len(t_index_list)
+        stream.frame_bff_size = frame_buffer_size
+        if stream.use_denoising_batch:
+            stream.batch_size = stream.denoising_steps_num * frame_buffer_size
+            if stream.cfg_type == "initialize":
+                stream.trt_unet_batch_size = (stream.denoising_steps_num + 1) * stream.frame_bff_size
+            elif stream.cfg_type == "full":
+                stream.trt_unet_batch_size = 2 * stream.denoising_steps_num * stream.frame_bff_size
+            else:
+                stream.trt_unet_batch_size = stream.denoising_steps_num * frame_buffer_size
+        else:
+            stream.trt_unet_batch_size = frame_buffer_size
+            stream.batch_size = frame_buffer_size
+
     def __call__(self, image: str | Image.Image | torch.Tensor | None = None, prompt: str | None = None):
         if self.mode == "img2img":
             return self.img2img(image, prompt)

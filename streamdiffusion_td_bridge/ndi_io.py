@@ -94,6 +94,13 @@ class NdiVideoInput:
         self.width = width
         self.height = height
         self.sequence = 0
+        self._stale_after_s = float(
+            __import__("os").environ.get("SDTD_NDI_STALE_SEC", "2.0")
+        )
+        self._last_frame_at = 0.0
+        self._last_reconnect_at = 0.0
+        self._connected_ndi_name: str | None = None
+        self._source_rotate = 0
         self.ndi = _load_ndi()
         if not self.ndi.initialize():
             raise NdiError("NDI initialization failed")
@@ -103,29 +110,70 @@ class NdiVideoInput:
             raise NdiError("NDI finder creation failed")
 
         source = self._wait_for_source()
-        create = self.ndi.RecvCreateV3()
-        create.source_to_connect_to = source
-        create.color_format = self.ndi.RECV_COLOR_FORMAT_BGRX_BGRA
-        create.bandwidth = self.ndi.RECV_BANDWIDTH_HIGHEST
-        self.receiver = self.ndi.recv_create_v3(create)
-        if self.receiver is None:
-            raise NdiError(f"Could not create NDI receiver for {source.ndi_name}")
+        self._connect_source(source, initial=True)
+
+    def _find_matching_sources(self) -> list:
+        self.ndi.find_wait_for_sources(self.finder, 250)
+        sources = self.ndi.find_get_current_sources(self.finder) or []
+        if self.source_name is None:
+            return list(sources)
+        return [source for source in sources if _source_matches(self.source_name, source.ndi_name)]
 
     def _wait_for_source(self):
         deadline = time.monotonic() + 20
         last_seen: list[str] = []
         while time.monotonic() < deadline:
-            self.ndi.find_wait_for_sources(self.finder, 1000)
-            sources = self.ndi.find_get_current_sources(self.finder)
-            last_seen = [source.ndi_name for source in sources]
-            if not sources:
-                continue
+            matches = self._find_matching_sources()
+            last_seen = [source.ndi_name for source in matches]
+            if matches:
+                return matches[0]
             if self.source_name is None:
-                return sources[0]
-            for source in sources:
-                if _source_matches(self.source_name, source.ndi_name):
-                    return source
+                self.ndi.find_wait_for_sources(self.finder, 1000)
+                sources = self.ndi.find_get_current_sources(self.finder)
+                if sources:
+                    return sources[0]
         raise NdiError(f"NDI source {self.source_name!r} not found. Seen: {last_seen}")
+
+    def _connect_source(self, source, *, initial: bool = False) -> None:
+        if initial:
+            create = self.ndi.RecvCreateV3()
+            create.source_to_connect_to = source
+            create.color_format = self.ndi.RECV_COLOR_FORMAT_BGRX_BGRA
+            create.bandwidth = self.ndi.RECV_BANDWIDTH_HIGHEST
+            self.receiver = self.ndi.recv_create_v3(create)
+            if self.receiver is None:
+                raise NdiError(f"Could not create NDI receiver for {source.ndi_name}")
+        else:
+            self.ndi.recv_connect(self.receiver, source, None, 1000)
+        self._connected_ndi_name = source.ndi_name
+        self._last_reconnect_at = time.monotonic()
+        print(f"[ndi] input connected: {source.ndi_name}")
+
+    def _maybe_reconnect(self) -> None:
+        now = time.monotonic()
+        if self._last_frame_at and now - self._last_frame_at < self._stale_after_s:
+            return
+        if now - self._last_reconnect_at < 1.0:
+            return
+        matches = self._find_matching_sources()
+        if not matches:
+            return
+        start = self._source_rotate % len(matches)
+        for offset in range(len(matches)):
+            candidate = matches[(start + offset) % len(matches)]
+            if candidate.ndi_name == self._connected_ndi_name:
+                continue
+            try:
+                self._connect_source(candidate)
+                self._source_rotate = (start + offset + 1) % len(matches)
+                return
+            except Exception as exc:  # noqa: BLE001
+                print(f"[ndi] reconnect failed for {candidate.ndi_name}: {exc}")
+        # Same host still advertising but no frames — refresh the connection.
+        try:
+            self._connect_source(matches[0])
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ndi] reconnect refresh failed for {matches[0].ndi_name}: {exc}")
 
     def set_resolution(self, width: int, height: int) -> None:
         self.width = width
@@ -134,6 +182,7 @@ class NdiVideoInput:
     def read(self, timeout_ms: int = 1000) -> VideoFrame | None:
         frame_type, video, _audio, _metadata = self.ndi.recv_capture_v2(self.receiver, timeout_ms)
         if frame_type == self.ndi.FRAME_TYPE_NONE:
+            self._maybe_reconnect()
             return None
         if frame_type != self.ndi.FRAME_TYPE_VIDEO:
             return None
@@ -147,6 +196,7 @@ class NdiVideoInput:
             rgb = data[:, :, :3][:, :, ::-1]
             rgb = resize_rgb(rgb, self.width, self.height)
             self.sequence += 1
+            self._last_frame_at = time.monotonic()
             return VideoFrame.now(rgb, self.sequence)
         finally:
             self.ndi.recv_free_video_v2(self.receiver, video)

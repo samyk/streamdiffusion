@@ -16,6 +16,16 @@ import sys
 REPO = "/Users/samy/c/touch/samysd/touchdesigner"
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
+from hal_control_defs import (
+    TD_HAL_DEFAULTS,
+    UPSCALE_FACTOR_LABELS,
+    UPSCALE_FACTOR_NAMES,
+    UPSCALE_MAXINE_QUALITY_LABELS,
+    UPSCALE_MAXINE_QUALITY_NAMES,
+    UPSCALE_METHOD_LABELS,
+    UPSCALE_METHOD_NAMES,
+    apply_td_hal_defaults,
+)
 from instances import get_instance
 
 profile = get_instance(INSTANCE)
@@ -71,12 +81,12 @@ pg = ctrl.appendCustomPage("Denoise")
 denoise = pg.appendInt("Denoise", label="Step 1 (1-49)")
 denoise.normMin = 1
 denoise.normMax = 49
-ctrl.par.Denoise = 35
+ctrl.par.Denoise = TD_HAL_DEFAULTS["Denoise"]
 for name, label in (("Step2", "Step 2 (0=off)"), ("Step3", "Step 3"), ("Step4", "Step 4")):
     step = pg.appendInt(name, label=label)
     step.normMin = 0
     step.normMax = 49
-    setattr(ctrl.par, name, 0)
+    setattr(ctrl.par, name, TD_HAL_DEFAULTS[name])
 
 # --- Model ---
 pg = ctrl.appendCustomPage("Model")
@@ -87,6 +97,9 @@ ctrl.par.Preset.menuNames = [
     "sd_turbo_fast",
     "sd_turbo_quality",
     "lcm_lora_style",
+    "flux2_klein_fast",
+    "flux2_klein_quality",
+    "flux2_klein_9b",
     "passthrough",
 ]
 ctrl.par.Preset.menuLabels = [
@@ -95,13 +108,16 @@ ctrl.par.Preset.menuLabels = [
     "SD Turbo Fast",
     "SD Turbo Quality",
     "SD1.5 LCM LoRA",
+    "FLUX.2 Klein Fast (4B)",
+    "FLUX.2 Klein Quality (4B)",
+    "FLUX.2 Klein 9B",
     "Passthrough",
 ]
-ctrl.par.Preset = "sdxl_turbo_fast"
+ctrl.par.Preset = TD_HAL_DEFAULTS["Preset"]
 pg.appendMenu("Qualitymode", label="Quality Mode")
 ctrl.par.Qualitymode.menuNames = ["fast", "quality"]
 ctrl.par.Qualitymode.menuLabels = ["Fast", "Quality"]
-ctrl.par.Qualitymode = "fast"
+ctrl.par.Qualitymode = TD_HAL_DEFAULTS["Qualitymode"]
 pg.appendStr("Modelid", label="Custom Model (HF id or .safetensors)")
 ctrl.par.Modelid = ""
 pg.appendMenu("Sdmode", label="Mode")
@@ -116,17 +132,23 @@ ctrl.par.Acceleration = "none"
 # --- Quality ---
 pg = ctrl.appendCustomPage("Quality")
 pg.appendInt("Width", label="Width")
-ctrl.par.Width = 768
+ctrl.par.Width = TD_HAL_DEFAULTS["Width"]
 pg.appendInt("Height", label="Height")
-ctrl.par.Height = 768
+ctrl.par.Height = TD_HAL_DEFAULTS["Height"]
+framebatch = pg.appendInt("Framebatch", label="Frame Batch Count")
+framebatch.normMin = 1
+framebatch.normMax = 8
+ctrl.par.Framebatch = TD_HAL_DEFAULTS["Framebatch"]
+pg.appendToggle("Fluxtransformerengine", label="FLUX Blackwell Transformer Engine")
+ctrl.par.Fluxtransformerengine = TD_HAL_DEFAULTS["Fluxtransformerengine"]
 pg.appendFloat("Guidance", label="Guidance Scale")
-ctrl.par.Guidance = 1.1
+ctrl.par.Guidance = TD_HAL_DEFAULTS["Guidance"]
 pg.appendFloat("Delta", label="Delta")
-ctrl.par.Delta = 1.0
+ctrl.par.Delta = TD_HAL_DEFAULTS["Delta"]
 pg.appendInt("Seed", label="Seed")
-ctrl.par.Seed = 2
+ctrl.par.Seed = TD_HAL_DEFAULTS["Seed"]
 pg.appendToggle("Usetinyvae", label="Use Tiny VAE (off = sharper, slower)")
-ctrl.par.Usetinyvae = True
+ctrl.par.Usetinyvae = TD_HAL_DEFAULTS["Usetinyvae"]
 pg.appendStr("Vaeid", label="Tiny VAE id (blank = auto taesd/taesdxl)")
 ctrl.par.Vaeid = ""
 
@@ -138,20 +160,41 @@ for index in (1, 2, 3):
     setattr(ctrl.par, f"Lora{index}path", "")
     setattr(ctrl.par, f"Lora{index}scale", 1.0)
 
+# --- Upscale ---
+pg = ctrl.appendCustomPage("Upscale")
+pg.appendToggle("Upscaleenabled", label="Upscale Enabled")
+ctrl.par.Upscaleenabled = TD_HAL_DEFAULTS["Upscaleenabled"]
+pg.appendMenu("Upscalefactor", label="Upscale Factor")
+ctrl.par.Upscalefactor.menuNames = UPSCALE_FACTOR_NAMES
+ctrl.par.Upscalefactor.menuLabels = UPSCALE_FACTOR_LABELS
+ctrl.par.Upscalefactor = TD_HAL_DEFAULTS["Upscalefactor"]
+pg.appendMenu("Upscalemethod", label="Upscale Method")
+ctrl.par.Upscalemethod.menuNames = UPSCALE_METHOD_NAMES
+ctrl.par.Upscalemethod.menuLabels = UPSCALE_METHOD_LABELS
+ctrl.par.Upscalemethod = TD_HAL_DEFAULTS["Upscalemethod"]
+pg.appendToggle("Upscalehalf", label="Real-ESRGAN FP16 (half)")
+ctrl.par.Upscalehalf = TD_HAL_DEFAULTS["Upscalehalf"]
+pg.appendMenu("Upscalemaxinequality", label="Maxine Quality")
+ctrl.par.Upscalemaxinequality.menuNames = UPSCALE_MAXINE_QUALITY_NAMES
+ctrl.par.Upscalemaxinequality.menuLabels = UPSCALE_MAXINE_QUALITY_LABELS
+ctrl.par.Upscalemaxinequality = TD_HAL_DEFAULTS["Upscalemaxinequality"]
+pg.appendStr("Upscalemodel", label="Custom Upscale Model (.pth)")
+ctrl.par.Upscalemodel = ""
+
 # --- Display ---
 pg = ctrl.appendCustomPage("Display")
 pip = pg.appendFloat("Pipscale", label="PiP Size")
 pip.normMin = 0.05
 pip.normMax = 1.0
-ctrl.par.Pipscale = 0.25
+ctrl.par.Pipscale = TD_HAL_DEFAULTS["Pipscale"]
 text = pg.appendFloat("Textscale", label="Text Size")
 text.normMin = 0.25
 text.normMax = 4.0
-ctrl.par.Textscale = 1.0
+ctrl.par.Textscale = TD_HAL_DEFAULTS["Textscale"]
 lift = pg.appendFloat("Textlift", label="Text Lift (px)")
 lift.normMin = 0
 lift.normMax = 200
-ctrl.par.Textlift = 36
+ctrl.par.Textlift = TD_HAL_DEFAULTS["Textlift"]
 
 # --- Advanced ---
 pg = ctrl.appendCustomPage("Advanced")
@@ -167,6 +210,8 @@ pg.appendStr("Ipimagepath", label="IP-Adapter Image Path (TRT only)")
 ctrl.par.Ipimagepath = ""
 pg.appendFloat("Ipscale", label="IP-Adapter Scale")
 ctrl.par.Ipscale = 0.5
+pg.appendStr("Ipmodel", label="IP-Adapter Model (HF id)")
+ctrl.par.Ipmodel = "h94/IP-Adapter"
 pg.appendStr("Controlnetmodel", label="ControlNet Model (TRT only)")
 ctrl.par.Controlnetmodel = ""
 pg.appendFloat("Controlnetscale", label="ControlNet Scale")

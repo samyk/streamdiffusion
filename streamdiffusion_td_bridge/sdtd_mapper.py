@@ -6,6 +6,8 @@ MODEL_PRESETS: dict[str, str] = {
     "stabilityai/sd-turbo": "sd_turbo_fast",
     "stabilityai/sdxl-turbo": "sdxl_turbo_fast",
     "runwayml/stable-diffusion-v1-5": "lcm_lora_style",
+    "black-forest-labs/FLUX.2-klein-4B": "flux2_klein_fast",
+    "black-forest-labs/FLUX.2-klein-9B": "flux2_klein_9b",
 }
 
 PRESET_NAMES = set(
@@ -16,14 +18,34 @@ PRESET_NAMES = set(
         "sdxl_turbo_fast",
         "sdxl_turbo_quality",
         "lcm_lora_style",
+        "flux2_klein_fast",
+        "flux2_klein_quality",
+        "flux2_klein_9b",
     ]
 )
 
 
+def normalize_stream_params(
+    params: dict[str, Any],
+    previous: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Pass through TD params; validation happens in the worker."""
+    return dict(params)
+
+
 def _model_fields_changed(params: dict[str, Any], previous: dict[str, Any] | None) -> bool:
+    keys = (
+        "model_id",
+        "preset",
+        "acceleration",
+        "mode",
+        "sdmode",
+        "frame_buffer_size",
+        "flux_transformer_engine",
+    )
     if not previous:
-        return any(key in params for key in ("model_id", "preset", "acceleration", "mode", "sdmode"))
-    for key in ("model_id", "preset", "acceleration", "mode", "sdmode"):
+        return any(key in params for key in keys)
+    for key in keys:
         if key in params and params.get(key) != previous.get(key):
             return True
     return False
@@ -109,7 +131,29 @@ def daydream_params_to_commands(
         if params.get("width") and params.get("height"):
             load_command["width"] = int(params["width"])
             load_command["height"] = int(params["height"])
+        if params.get("frame_buffer_size") is not None:
+            load_command["frame_buffer_size"] = max(1, int(params["frame_buffer_size"]))
+        if params.get("flux_transformer_engine") is not None:
+            load_command["flux_transformer_engine"] = bool(params["flux_transformer_engine"])
         commands.append(load_command)
+
+    if _field_changed(params, previous, "frame_buffer_size") and not _model_fields_changed(params, previous):
+        commands.append(
+            {
+                "type": "set_frame_buffer",
+                "frame_buffer_size": max(1, int(params["frame_buffer_size"])),
+            }
+        )
+
+    if _field_changed(params, previous, "flux_transformer_engine") and not _model_fields_changed(
+        params, previous
+    ):
+        commands.append(
+            {
+                "type": "set_flux_transformer_engine",
+                "enabled": bool(params["flux_transformer_engine"]),
+            }
+        )
 
     prompt_entries = []
     if "prompts" in params:

@@ -39,6 +39,7 @@ class BridgeApp:
         self.threads: list[threading.Thread] = []
 
     async def run(self) -> None:
+        self.config.print_startup_settings()
         self.video_input, self.video_output = make_video_io(
             self.config.video_backend,
             self.config.input_name,
@@ -101,6 +102,8 @@ class BridgeApp:
                 last_resolution = resolution
             frame = self.video_input.read(timeout_ms=1000)
             if frame is None:
+                if time.monotonic() - getattr(self.video_input, "_last_frame_at", 0.0) > 2.0:
+                    self.state.update(fps_in=0.0)
                 continue
             now = time.perf_counter()
             dt = now - last_time

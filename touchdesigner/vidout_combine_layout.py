@@ -4,6 +4,10 @@ TEXT_LIFT_PX = 36
 TEXT_FONT_BASE = 28.0
 TEXT_LINE_HEIGHT = 1.35
 TEXT_CHAR_WIDTH = 0.55
+FPS_FONT_BASE = 16.0
+FPS_MARGIN_PX = 12
+
+_ndi_fps_state: dict[str, dict] = {}
 
 
 def _hal_control_for(vidout_path):
@@ -47,6 +51,50 @@ def _display_pars(vidout_path):
     if vidout is not None:
         return vidout.par
     return None
+
+
+def _ndi_receive_fps(ndi_top) -> float:
+    if ndi_top is None:
+        return 0.0
+    key = ndi_top.path
+    state = _ndi_fps_state.setdefault(
+        key, {"last_count": None, "last_t": None, "fps": 0.0}
+    )
+    count = int(getattr(ndi_top, "totalCooks", 0))
+    now = absTime.seconds
+    if state["last_count"] is not None and count > state["last_count"]:
+        dt = now - (state["last_t"] or now)
+        if dt > 0.0005:
+            instant = (count - state["last_count"]) / dt
+            if state["fps"] > 0:
+                state["fps"] = state["fps"] * 0.85 + instant * 0.15
+            else:
+                state["fps"] = instant
+    state["last_count"] = count
+    state["last_t"] = now
+    return float(state["fps"])
+
+
+def _configure_text_top(text_top, *, text, out_w, out_h, font_size, alignx, aligny):
+    text_top.par.text = text
+    text_top.par.alignx = alignx
+    text_top.par.aligny = aligny
+    text_top.par.outputresolution = "custom"
+    text_top.par.wordwrap = alignx == "center"
+    text_top.par.fontautosize = "off"
+    text_top.par.fontsizex = font_size
+    text_top.par.fontsizey = font_size
+    text_top.par.fontsizexunit = "points"
+    text_top.par.fontsizeyunit = "points"
+    text_top.par.linespacing = max(2.0, font_size * 0.12)
+    text_top.par.linespacingunit = "points"
+    text_top.par.keepfontratio = True
+    text_top.par.fontcolorr = 1
+    text_top.par.fontcolorg = 1
+    text_top.par.fontcolorb = 1
+    text_top.par.fontalpha = 1
+    text_top.par.resolutionw = int(out_w)
+    text_top.par.resolutionh = int(out_h)
 
 
 def update_layout(vidout_path="/project1/vidout"):
@@ -94,25 +142,15 @@ def update_layout(vidout_path="/project1/vidout"):
         text_top = combine.op(name)
         if text_top is None:
             continue
-        text_top.par.text = prompt
-        text_top.par.alignx = "center"
-        text_top.par.aligny = "bottom"
-        text_top.par.outputresolution = "custom"
-        text_top.par.wordwrap = True
-        text_top.par.fontautosize = "auto"
-        text_top.par.fontsizex = font_size
-        text_top.par.fontsizey = font_size
-        text_top.par.fontsizexunit = "points"
-        text_top.par.fontsizeyunit = "points"
-        text_top.par.linespacing = max(2.0, font_size * 0.12)
-        text_top.par.linespacingunit = "points"
-        text_top.par.keepfontratio = True
-        text_top.par.fontcolorr = 1
-        text_top.par.fontcolorg = 1
-        text_top.par.fontcolorb = 1
-        text_top.par.fontalpha = 1
-        text_top.par.resolutionw = int(out_w)
-        text_top.par.resolutionh = text_h
+        _configure_text_top(
+            text_top,
+            text=prompt,
+            out_w=out_w,
+            out_h=text_h,
+            font_size=font_size,
+            alignx="center",
+            aligny="bottom",
+        )
 
     if comp2 is not None:
         comp2.par.sx = 1
@@ -121,3 +159,24 @@ def update_layout(vidout_path="/project1/vidout"):
         comp2.par.justifyv = "bottom"
         comp2.par.tx = 0
         comp2.par.ty = text_lift
+
+    fps = _ndi_receive_fps(op(f"{vidout_path}/ndiin2"))
+    text_fps = combine.op("text_fps")
+    comp_hud = combine.op("comp_hud")
+    if text_fps is not None:
+        fps_label = f"NDI {fps:.1f} fps" if fps > 0 else "NDI -- fps"
+        fps_font = max(10.0, FPS_FONT_BASE)
+        _configure_text_top(
+            text_fps,
+            text=fps_label,
+            out_w=max(180, int(out_w * 0.25)),
+            out_h=36,
+            font_size=fps_font,
+            alignx="left",
+            aligny="bottom",
+        )
+    if comp_hud is not None:
+        comp_hud.par.justifyh = "left"
+        comp_hud.par.justifyv = "bottom"
+        comp_hud.par.tx = FPS_MARGIN_PX
+        comp_hud.par.ty = FPS_MARGIN_PX

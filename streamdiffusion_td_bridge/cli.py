@@ -81,6 +81,18 @@ def build_parser() -> argparse.ArgumentParser:
         ],
         help="Maxine VSR quality preset (default: medium).",
     )
+    parser.add_argument(
+        "--frame-buffer-size",
+        type=int,
+        default=None,
+        help="StreamDiffusion frame_buffer_size / stream batch depth (default: preset value).",
+    )
+    parser.add_argument(
+        "--flux-transformer-engine",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="FLUX.2 Klein: compile transformer with bfloat16 on Blackwell (default: on).",
+    )
     return parser
 
 
@@ -111,7 +123,10 @@ def main() -> None:
         upscale_half=args.upscale_half,
         upscale_maxine_quality=args.upscale_maxine_quality,
         upscale_model=args.upscale_model,
+        flux_transformer_engine=args.flux_transformer_engine,
     )
+    if args.frame_buffer_size is not None:
+        config.frame_buffer_size = max(1, int(args.frame_buffer_size))
     asyncio.run(BridgeApp(config).run())
 
 

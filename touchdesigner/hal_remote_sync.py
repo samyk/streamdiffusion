@@ -88,6 +88,12 @@ def build_params():
         "sdmode": ctrl.par.Sdmode.eval(),
         "width": int(ctrl.par.Width),
         "height": int(ctrl.par.Height),
+        "frame_buffer_size": int(ctrl.par.Framebatch)
+        if hasattr(ctrl.par, "Framebatch")
+        else 1,
+        "flux_transformer_engine": bool(int(ctrl.par.Fluxtransformerengine))
+        if hasattr(ctrl.par, "Fluxtransformerengine")
+        else True,
         "use_tiny_vae": bool(int(ctrl.par.Usetinyvae))
         if hasattr(ctrl.par, "Usetinyvae")
         else True,
@@ -124,6 +130,20 @@ def build_params():
         params["controlnet_scale"] = (
             float(ctrl.par.Controlnetscale) if hasattr(ctrl.par, "Controlnetscale") else 0.5
         )
+
+    if hasattr(ctrl.par, "Upscaleenabled"):
+        params["upscale_enabled"] = bool(int(ctrl.par.Upscaleenabled))
+        params["upscale_factor"] = int(ctrl.par.Upscalefactor.eval())
+        params["upscale_method"] = ctrl.par.Upscalemethod.eval()
+        params["upscale_half"] = bool(int(ctrl.par.Upscalehalf))
+        params["upscale_maxine_quality"] = ctrl.par.Upscalemaxinequality.eval()
+        upscale_model = ctrl.par.Upscalemodel.eval().strip()
+        if upscale_model:
+            params["upscale_model"] = upscale_model
+
+    ip_model = ctrl.par.Ipmodel.eval().strip() if hasattr(ctrl.par, "Ipmodel") else ""
+    if ip_model and ip_path:
+        params["ipadapter_model"] = ip_model
 
     return params
 
@@ -186,6 +206,8 @@ def onValueChange(par, prev):
         "sdmode",
         "width",
         "height",
+        "framebatch",
+        "fluxtransformer",
         "filter",
         "pause",
         "lora",
@@ -193,8 +215,10 @@ def onValueChange(par, prev):
         "vaeid",
         "ipimage",
         "ipscale",
+        "ipmodel",
         "controlnet",
         "promptinterp",
+        "upscale",
     )
     if any(token in par.name.lower() for token in tokens):
         push_params()

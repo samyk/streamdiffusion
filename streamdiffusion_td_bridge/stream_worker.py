@@ -11,7 +11,7 @@ import torch
 from PIL import Image
 
 from .accel import resolve_acceleration
-from .config import PRESETS, BridgeConfig, ModelPreset, RuntimeState
+from .config import PRESETS, BridgeConfig, ModelPreset, RuntimeState, is_flux_preset
 from .control import normalize_resolution, parse_prompt_entries, parse_t_index_list
 from .deps import load_wrapper_class
 from .frames import LatestFrameQueue, SharedState, VideoFrame
@@ -34,6 +34,7 @@ class StreamWorker:
         self.command_queue = command_queue
         self.state = state
         self.active_preset = PRESETS[config.preset]
+        self.config.frame_buffer_size = config.frame_buffer_size or self.active_preset.frame_buffer_size
         self.wrapper = None
         self.prompt = config.prompt
         self.prompt_entries: list[dict[str, Any]] = (
@@ -48,6 +49,11 @@ class StreamWorker:
         self.vae_id: str | None = None
         self._needs_reload = self.active_preset.mode != "passthrough"
         self._stop = False
+        self._last_loaded_signature: tuple[Any, ...] | None = None
+        self._pending_t_index: list[int] | None = None
+        self._pending_t_index_at = 0.0
+        self._t_index_debounce_s = 0.2
+        self._ignored_td: set[tuple[str, str, str]] = set()
         self.upscaler: Upscaler | None = None
         self._reload_upscaler()
 
@@ -60,8 +66,15 @@ class StreamWorker:
         self.state.update(status="running")
         while not self._stop:
             self._drain_commands()
+            self._maybe_apply_pending_t_index()
             if self._needs_reload:
-                self._load_model()
+                signature = self._load_signature()
+                if signature == self._last_loaded_signature and self.wrapper is not None:
+                    self._needs_reload = False
+                else:
+                    self._load_model()
+                    if self.wrapper is not None or self.active_preset.mode == "passthrough":
+                        self._last_loaded_signature = signature
 
             frame = self.input_queue.get(timeout=0.05)
             if frame is None:
@@ -124,18 +137,25 @@ class StreamWorker:
             return
 
         if ctype in ("set_denoise", "set_t_index_list"):
-            self._update_t_index_list(parse_t_index_list(command))
+            try:
+                self._update_t_index_list(parse_t_index_list(command))
+            except ValueError as exc:
+                self._ignore_td("denoise", command, str(exc))
             return
 
         if ctype == "set_strength":
-            self._update_t_index_list(
-                parse_t_index_list(
-                    {
-                        "value": float(command["value"]),
-                        "scale": "normalized" if float(command["value"]) <= 1.0 else "steps",
-                    }
+            try:
+                self._update_t_index_list(
+                    parse_t_index_list(
+                        {
+                            "value": float(command["value"]),
+                            "scale": "normalized" if float(command["value"]) <= 1.0 else "steps",
+                        }
+                    )
                 )
-            )
+            except (KeyError, TypeError, ValueError) as exc:
+                self._ignore_td("strength", command, str(exc))
+                return
             self.state.update(strength=float(command["value"]))
             return
 
@@ -281,44 +301,40 @@ class StreamWorker:
             self.state.mutate(self._sync_state)
             return
 
-        if ctype == "load_model":
-            if command.get("width") is not None and command.get("height") is not None:
-                width, height = normalize_resolution(
-                    int(command["width"]),
-                    int(command["height"]),
+        if ctype == "set_frame_buffer":
+            frame_buffer_size = max(1, int(command.get("frame_buffer_size", command.get("value", 1))))
+            if not self._valid_frame_buffer_request(frame_buffer_size):
+                self._ignore_td(
+                    "frame_buffer_size",
+                    frame_buffer_size,
+                    "needs multiple denoise steps on StreamDiffusion (use Framebatch=1 for turbo)",
                 )
-                self.config.width = width
-                self.config.height = height
-                self.state.update(width=width, height=height)
-            preset_name = command.get("preset")
-            if preset_name:
-                if preset_name not in PRESETS:
-                    raise ValueError(f"Unknown preset {preset_name!r}. Known: {sorted(PRESETS)}")
-                self.active_preset = PRESETS[preset_name]
-                if command.get("t_index_list"):
-                    self.active_preset = replace(
-                        self.active_preset,
-                        t_index_list=[int(v) for v in command["t_index_list"]],
-                    )
-            elif command.get("model"):
-                self.active_preset = replace(
-                    self.active_preset,
-                    name=str(command.get("name", "custom")),
-                    model_id_or_path=str(command["model"]),
-                    mode=command.get("mode", self.active_preset.mode),
-                    acceleration=command.get("acceleration", self.active_preset.acceleration),
-                    t_index_list=list(command.get("t_index_list", self.active_preset.t_index_list)),
-                )
-            else:
-                self.active_preset = replace(
-                    self.active_preset,
-                    mode=command.get("mode", self.active_preset.mode),
-                    acceleration=command.get("acceleration", self.active_preset.acceleration),
-                )
-            self.use_tiny_vae = self.active_preset.use_tiny_vae
-            self.wrapper = None
-            self._needs_reload = self.active_preset.mode != "passthrough"
+                return
+            if frame_buffer_size == self.config.frame_buffer_size:
+                return
+            self.config.frame_buffer_size = frame_buffer_size
+            self.active_preset = replace(self.active_preset, frame_buffer_size=frame_buffer_size)
+            if self._reconfigure_streamdiffusion_batch(self.active_preset.t_index_list, frame_buffer_size):
+                self.state.mutate(self._sync_state)
+            return
+
+        if ctype == "set_flux_transformer_engine":
+            enabled = bool(command.get("enabled", command.get("value", True)))
+            if enabled == self.config.flux_transformer_engine:
+                return
+            self.config.flux_transformer_engine = enabled
+            if is_flux_preset(
+                pipeline=self.active_preset.pipeline,
+                name=self.active_preset.name,
+            ):
+                self.wrapper = None
+                self._needs_reload = True
             self.state.mutate(self._sync_state)
+            return
+
+        if ctype == "load_model":
+            if not self._apply_load_model(command):
+                return
             return
 
         if ctype == "ping":
@@ -327,16 +343,214 @@ class StreamWorker:
         raise ValueError(f"Unknown command type: {ctype!r}")
 
     def _update_t_index_list(self, t_index_list: list[int]) -> None:
-        if not t_index_list:
-            raise ValueError("t_index_list must not be empty")
+        if not self._valid_t_index_list(t_index_list):
+            self._ignore_td("t_index_list", t_index_list, "expected 1-4 steps in range 1-49")
+            return
+        if t_index_list == list(self.active_preset.t_index_list):
+            return
         self.active_preset = replace(self.active_preset, t_index_list=t_index_list)
         self.state.update(t_index_list=t_index_list)
         if self.wrapper is None:
             return
-        stream = self.wrapper.stream
-        stream.t_list = t_index_list
-        stream.denoising_steps_num = len(t_index_list)
-        self._prepare_current_prompt()
+        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+            self.wrapper.set_t_index_list(t_index_list)
+            return
+        self._pending_t_index = list(t_index_list)
+        self._pending_t_index_at = time.monotonic()
+
+    def _maybe_apply_pending_t_index(self) -> None:
+        if self._pending_t_index is None:
+            return
+        if time.monotonic() - self._pending_t_index_at < self._t_index_debounce_s:
+            return
+        t_index_list = self._pending_t_index
+        self._pending_t_index = None
+        if self._reconfigure_streamdiffusion_batch(
+            t_index_list,
+            self.config.frame_buffer_size,
+        ):
+            self.state.mutate(self._sync_state)
+
+    def _reconfigure_streamdiffusion_batch(
+        self,
+        t_index_list: list[int],
+        frame_buffer_size: int,
+    ) -> bool:
+        if self.wrapper is None:
+            return False
+        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+            return False
+        if not hasattr(self.wrapper, "reconfigure_batch"):
+            return False
+        if not self._valid_t_index_list(t_index_list):
+            return False
+        requested = max(1, int(frame_buffer_size))
+        if not self._valid_frame_buffer_request(requested, t_index_list=t_index_list):
+            return False
+        self.config.frame_buffer_size = requested
+        self.active_preset = replace(
+            self.active_preset,
+            t_index_list=list(t_index_list),
+            frame_buffer_size=requested,
+        )
+        try:
+            self.wrapper.reconfigure_batch(t_index_list, requested)
+            self._prepare_current_prompt()
+        except Exception as exc:  # noqa: BLE001
+            self._ignore_td("stream_batch", (t_index_list, requested), f"{type(exc).__name__}: {exc}")
+            return False
+        return True
+
+    def _ignore_td(self, key: str, value: Any, reason: str) -> None:
+        token = (key, str(value), reason)
+        if token in self._ignored_td:
+            return
+        self._ignored_td.add(token)
+        print(f"[stream_worker] ignoring TD {key}={value!r}: {reason}")
+
+    def _valid_t_index_list(self, t_index_list: list[int]) -> bool:
+        if not t_index_list or len(t_index_list) > 4:
+            return False
+        return all(1 <= int(v) <= 49 for v in t_index_list)
+
+    def _valid_frame_buffer_request(
+        self,
+        requested: int,
+        *,
+        t_index_list: list[int] | None = None,
+    ) -> bool:
+        requested = max(1, int(requested))
+        if requested > 8:
+            return False
+        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+            return True
+        steps = t_index_list if t_index_list is not None else list(self.active_preset.t_index_list)
+        if len(steps) <= 1 and requested > 1:
+            return False
+        return True
+
+    def _apply_load_model(self, command: dict[str, Any]) -> bool:
+        """Apply load_model only when something valid actually requires a reload."""
+        reload_needed = False
+
+        if command.get("width") is not None and command.get("height") is not None:
+            width, height = normalize_resolution(int(command["width"]), int(command["height"]))
+            if width != self.config.width or height != self.config.height:
+                self.config.width = width
+                self.config.height = height
+                self.state.update(width=width, height=height)
+                reload_needed = True
+
+        preset_name = command.get("preset")
+        if preset_name:
+            if preset_name not in PRESETS:
+                self._ignore_td("preset", preset_name, f"unknown preset (known: {sorted(PRESETS)})")
+            else:
+                previous_t_index = list(self.active_preset.t_index_list)
+                next_preset = PRESETS[preset_name]
+                t_index_list = command.get("t_index_list") or previous_t_index
+                if command.get("t_index_list") and not self._valid_t_index_list(
+                    [int(v) for v in t_index_list]
+                ):
+                    self._ignore_td("t_index_list", t_index_list, "expected 1-4 steps in range 1-49")
+                    t_index_list = previous_t_index
+                if (
+                    preset_name != self.active_preset.name
+                    or next_preset.model_id_or_path != self.active_preset.model_id_or_path
+                    or list(t_index_list) != list(self.active_preset.t_index_list)
+                ):
+                    self.active_preset = replace(
+                        next_preset,
+                        t_index_list=[int(v) for v in t_index_list],
+                    )
+                    reload_needed = True
+        elif command.get("model"):
+            pipeline = command.get("pipeline")
+            if pipeline is None and str(command["model"]).lower().find("flux.2-klein") >= 0:
+                pipeline = "flux2_klein"
+            t_index_list = list(command.get("t_index_list", self.active_preset.t_index_list))
+            if command.get("t_index_list") and not self._valid_t_index_list(t_index_list):
+                self._ignore_td("t_index_list", t_index_list, "expected 1-4 steps in range 1-49")
+                t_index_list = list(self.active_preset.t_index_list)
+            next_preset = replace(
+                self.active_preset,
+                name=str(command.get("name", "custom")),
+                model_id_or_path=str(command["model"]),
+                mode=command.get("mode", self.active_preset.mode),
+                acceleration=command.get("acceleration", self.active_preset.acceleration),
+                t_index_list=t_index_list,
+                pipeline=pipeline or self.active_preset.pipeline,
+            )
+            if next_preset.model_id_or_path != self.active_preset.model_id_or_path:
+                self.active_preset = next_preset
+                reload_needed = True
+        else:
+            next_mode = command.get("mode", self.active_preset.mode)
+            next_accel = command.get("acceleration", self.active_preset.acceleration)
+            if next_mode != self.active_preset.mode or next_accel != self.active_preset.acceleration:
+                self.active_preset = replace(
+                    self.active_preset,
+                    mode=next_mode,
+                    acceleration=next_accel,
+                )
+                reload_needed = True
+
+        if command.get("frame_buffer_size") is not None:
+            frame_buffer_size = max(1, int(command["frame_buffer_size"]))
+            if not self._valid_frame_buffer_request(frame_buffer_size):
+                self._ignore_td(
+                    "frame_buffer_size",
+                    frame_buffer_size,
+                    "needs multiple denoise steps on StreamDiffusion (use Framebatch=1 for turbo)",
+                )
+            elif frame_buffer_size != self.config.frame_buffer_size:
+                self.config.frame_buffer_size = frame_buffer_size
+                self.active_preset = replace(self.active_preset, frame_buffer_size=frame_buffer_size)
+                if self.wrapper is not None and self._reconfigure_streamdiffusion_batch(
+                    self.active_preset.t_index_list,
+                    frame_buffer_size,
+                ):
+                    reload_needed = False
+                else:
+                    reload_needed = True
+
+        if command.get("flux_transformer_engine") is not None:
+            enabled = bool(command["flux_transformer_engine"])
+            if enabled != self.config.flux_transformer_engine:
+                self.config.flux_transformer_engine = enabled
+                if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+                    reload_needed = True
+
+        if not reload_needed:
+            return False
+
+        self.use_tiny_vae = self.active_preset.use_tiny_vae
+        self.wrapper = None
+        self._needs_reload = self.active_preset.mode != "passthrough"
+        self.state.mutate(self._sync_state)
+        return True
+
+    def _effective_frame_buffer_size(self, requested: int | None = None) -> int:
+        size = self.config.frame_buffer_size if requested is None else max(1, int(requested))
+        if self._valid_frame_buffer_request(size):
+            return size
+        return 1
+
+    def _load_signature(self) -> tuple[Any, ...]:
+        acceleration = resolve_acceleration(self.config.acceleration, self.active_preset.acceleration)
+        return (
+            self.active_preset.name,
+            self.active_preset.model_id_or_path,
+            tuple(self.active_preset.t_index_list),
+            self._effective_frame_buffer_size(),
+            self.config.width,
+            self.config.height,
+            self.use_tiny_vae,
+            self.vae_id,
+            acceleration,
+            self.config.flux_transformer_engine,
+            self.active_preset.mode,
+        )
 
     def _load_model(self) -> None:
         if self.active_preset.mode == "passthrough":
@@ -346,18 +560,25 @@ class StreamWorker:
             return
 
         self.state.update(loading=True, status="loading", last_error=None)
-        wrapper_cls = load_wrapper_class()
+        wrapper_cls = load_wrapper_class(self.active_preset)
         acceleration = resolve_acceleration(self.config.acceleration, self.active_preset.acceleration)
+        frame_buffer_size = self.config.frame_buffer_size
+        if not self._valid_frame_buffer_request(frame_buffer_size):
+            frame_buffer_size = 1
+            self.config.frame_buffer_size = 1
         extra = dict(self.state.snapshot().get("extra", {}))
         extra["acceleration"] = acceleration
+        extra["pipeline"] = self.active_preset.pipeline
+        extra["frame_buffer_size"] = self.config.frame_buffer_size
+        extra["flux_transformer_engine"] = self.config.flux_transformer_engine
         self.state.update(extra=extra)
-        self.wrapper = wrapper_cls(
+        wrapper_kwargs = dict(
             model_id_or_path=self.active_preset.model_id_or_path,
             t_index_list=self.active_preset.t_index_list,
             lora_dict=self.active_preset.lora_dict,
             mode="img2img" if self.active_preset.mode == "v2v" else self.active_preset.mode,
             output_type="pil",
-            frame_buffer_size=self.active_preset.frame_buffer_size,
+            frame_buffer_size=frame_buffer_size,
             width=self.config.width,
             height=self.config.height,
             warmup=self.active_preset.warmup,
@@ -370,6 +591,19 @@ class StreamWorker:
             seed=self.seed,
             engine_dir=self.config.engine_dir,
         )
+        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+            wrapper_kwargs = dict(
+                model_id_or_path=self.active_preset.model_id_or_path,
+                t_index_list=self.active_preset.t_index_list,
+                width=self.config.width,
+                height=self.config.height,
+                frame_buffer_size=frame_buffer_size,
+                guidance_scale=self.guidance_scale,
+                seed=self.seed,
+                flux_transformer_engine=self.config.flux_transformer_engine,
+                warmup=self.active_preset.warmup,
+            )
+        self.wrapper = wrapper_cls(**wrapper_kwargs)
         self._prepare_current_prompt()
         self._apply_prompt_embeddings()
         self._needs_reload = False
@@ -386,11 +620,17 @@ class StreamWorker:
                 delta=self.delta,
                 seed=self.seed,
             )
-            if hasattr(self.wrapper.stream, "generator") and self.wrapper.stream.generator is not None:
+        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+            return
+        if hasattr(self.wrapper, "stream") and hasattr(self.wrapper.stream, "generator"):
+            if self.wrapper.stream.generator is not None:
                 self.wrapper.stream.generator.manual_seed(self.seed)
 
     def _apply_prompt_embeddings(self) -> None:
         if self.wrapper is None or not self.prompt_entries:
+            return
+        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+            self.wrapper.prompt = " | ".join(entry["text"] for entry in self.prompt_entries)
             return
         if len(self.prompt_entries) == 1:
             self.wrapper.stream.update_prompt(self.prompt_entries[0]["text"])
@@ -486,6 +726,9 @@ class StreamWorker:
         extra["upscale_half"] = self.config.upscale_half
         extra["upscale_maxine_quality"] = self.config.upscale_maxine_quality
         extra["upscale_runtime"] = self.upscaler.method if self.upscaler else "off"
+        extra["pipeline"] = self.active_preset.pipeline
+        extra["frame_buffer_size"] = self.config.frame_buffer_size
+        extra["flux_transformer_engine"] = self.config.flux_transformer_engine
         if self.upscaler is not None:
             out_w, out_h = self.upscaler.output_size(self.config.width, self.config.height)
             extra["output_width"] = out_w

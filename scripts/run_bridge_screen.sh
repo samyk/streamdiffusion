@@ -11,10 +11,12 @@ set -euo pipefail
 # Flags: --dual | -d | --both
 # Env:   SDTD_DUAL=1 also enables both (for scripts)
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=bridge_settings.sh
+source "${SCRIPT_DIR}/bridge_settings.sh"
+
 DUAL="${SDTD_DUAL:-0}"
-PROMPT_A=""
-PROMPT_B=""
 ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -37,18 +39,28 @@ done
 PROMPT_A="${ARGS[0]:-cybernetic botanical glass sculpture}"
 PROMPT_B="${ARGS[1]:-${SDTD_PROMPT_B:-coral reef person covered in anemones and fish}}"
 
+echo "Launching sdtd-bridge from ${ROOT}"
+echo "========== bridge settings =========="
+sdtd_print_settings a "${PROMPT_A}"
+if [[ "${DUAL}" == "1" ]]; then
+  sdtd_print_settings b "${PROMPT_B}"
+fi
+
 systemctl --user stop sdtd-bridge.service 2>/dev/null || true
 
-"${ROOT}/scripts/run_bridge_instance.sh" a "${PROMPT_A}"
+"${SCRIPT_DIR}/run_bridge_instance.sh" a "${PROMPT_A}" || LAUNCH_FAILED=1
 
 if [[ "${DUAL}" == "1" ]]; then
   SDTD_PRESET="${SDTD_PRESET_B:-${SDTD_PRESET:-sdxl_turbo_fast}}" \
   SDTD_WIDTH="${SDTD_WIDTH_B:-${SDTD_WIDTH:-768}}" \
   SDTD_HEIGHT="${SDTD_HEIGHT_B:-${SDTD_HEIGHT:-768}}" \
-    "${ROOT}/scripts/run_bridge_instance.sh" b "${PROMPT_B}"
+    "${SCRIPT_DIR}/run_bridge_instance.sh" b "${PROMPT_B}" || LAUNCH_FAILED=1
 fi
 
-echo ""
+if [[ "${LAUNCH_FAILED:-0}" == "1" ]]; then
+  exit 1
+fi
+
 if [[ "${DUAL}" == "1" ]]; then
   echo "Both bridges running:"
 else

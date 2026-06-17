@@ -14,6 +14,7 @@ import sys
 REPO = "/Users/samy/c/touch/samysd/touchdesigner"
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
+from hal_control_defs import HAL_CONTROL_PARSCOPE
 from instances import get_instance
 
 profile = get_instance(INSTANCE)
@@ -65,17 +66,7 @@ ui.par.header = True
 ui.par.custom = True
 ui.par.builtin = False
 ui.par.pagescope = "*"
-ui.par.parscope = (
-    "Remotehost Remoteport Streamid Pushall "
-    "Prompt Negativeprompt Prompt2 Prompt2weight Promptinterp "
-    "Denoise Step2 Step3 Step4 "
-    "Preset Qualitymode Modelid Sdmode Acceleration "
-    "Width Height Guidance Delta Seed Usetinyvae Vaeid "
-    "Lora1path Lora1scale Lora2path Lora2scale Lora3path Lora3scale "
-    "Pipscale Textscale Textlift "
-    "Filterthreshold Filterskip Pausestream "
-    "Ipimagepath Ipscale Controlnetmodel Controlnetscale"
-)
+ui.par.parscope = HAL_CONTROL_PARSCOPE
 ui.par.allowexpand = True
 ui.par.inputeditor = True
 ui.par.labels = True
@@ -104,6 +95,9 @@ ui.par.enable = True
 
 layout = op(f"{VIDOUT}/combine_layout")
 if layout is not None:
-    layout.module.update_layout(VIDOUT)
+    try:
+        layout.module.update_layout(VIDOUT)
+    except TypeError:
+        layout.module.update_layout()
 
 print(f"Created {ui.path} — instance {profile.label} controls.")

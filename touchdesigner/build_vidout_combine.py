@@ -121,7 +121,7 @@ for index, name in enumerate(("text2", "text3", "text4")):
     text_top.par.aligny = "bottom"
     text_top.par.outputresolution = "custom"
     text_top.par.wordwrap = True
-    text_top.par.fontautosize = "auto"
+    text_top.par.fontautosize = "off"
     text_top.par.fontcolorr = 1
     text_top.par.fontcolorg = 1
     text_top.par.fontcolorb = 1
@@ -151,9 +151,41 @@ if finull is None:
 finull.inputConnectors[0].connect(comp2)
 _place(finull, 400, 200)
 
+text_fps = COMBINE.op("text_fps")
+if text_fps is None or text_fps.OPType != "textTOP":
+    if text_fps:
+        text_fps.destroy()
+    text_fps = COMBINE.create("textTOP", "text_fps")
+text_fps.par.text = "NDI -- fps"
+text_fps.par.alignx = "left"
+text_fps.par.aligny = "bottom"
+text_fps.par.outputresolution = "custom"
+text_fps.par.fontautosize = "off"
+text_fps.par.fontcolorr = 1
+text_fps.par.fontcolorg = 1
+text_fps.par.fontcolorb = 1
+text_fps.par.keepfontratio = True
+_place(text_fps, 320, 200)
+
+comp_hud = COMBINE.op("comp_hud")
+if comp_hud is None or comp_hud.OPType != "compositeTOP":
+    if comp_hud:
+        comp_hud.destroy()
+    comp_hud = COMBINE.create("compositeTOP", "comp_hud")
+comp_hud.inputConnectors[0].connect(text_fps)
+comp_hud.inputConnectors[1].connect(finull)
+comp_hud.par.operand = "over"
+comp_hud.par.size = "input2"
+comp_hud.par.prefit = "nativeres"
+comp_hud.par.justifyh = "left"
+comp_hud.par.justifyv = "bottom"
+comp_hud.par.tx = 12
+comp_hud.par.ty = 12
+_place(comp_hud, 500, 200)
+
 out1 = COMBINE.op("out1")
 if out1 is not None:
-    out1.inputConnectors[0].connect(finull)
+    out1.inputConnectors[0].connect(comp_hud)
     _place(out1, 600, 200)
 
 layout_dat = VIDOUT.op("combine_layout")

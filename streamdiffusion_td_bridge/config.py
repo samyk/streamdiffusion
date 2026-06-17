@@ -6,6 +6,14 @@ from typing import Any, Literal
 
 Mode = Literal["passthrough", "img2img", "txt2img", "v2v"]
 Acceleration = Literal["none", "xformers", "tensorrt"]
+PipelineKind = Literal["streamdiffusion", "flux2_klein"]
+
+FLUX2_KLEIN_4B = "black-forest-labs/FLUX.2-klein-4B"
+FLUX2_KLEIN_9B = "black-forest-labs/FLUX.2-klein-9B"
+
+
+def is_flux_preset(*, pipeline: PipelineKind | str, name: str = "") -> bool:
+    return pipeline == "flux2_klein" or name.startswith("flux2_klein")
 
 
 @dataclass(frozen=True)
@@ -14,6 +22,7 @@ class ModelPreset:
     model_id_or_path: str
     t_index_list: list[int]
     mode: Mode = "img2img"
+    pipeline: PipelineKind = "streamdiffusion"
     acceleration: Acceleration = "tensorrt"
     frame_buffer_size: int = 1
     use_lcm_lora: bool = False
@@ -78,6 +87,48 @@ PRESETS: dict[str, ModelPreset] = {
         use_lcm_lora=False,
         cfg_type="none",
     ),
+    "flux2_klein_fast": ModelPreset(
+        name="flux2_klein_fast",
+        model_id_or_path="black-forest-labs/FLUX.2-klein-4B",
+        t_index_list=[1, 2, 3, 4],
+        mode="img2img",
+        pipeline="flux2_klein",
+        acceleration="none",
+        frame_buffer_size=1,
+        use_lcm_lora=False,
+        use_tiny_vae=False,
+        cfg_type="none",
+        use_denoising_batch=False,
+        warmup=2,
+    ),
+    "flux2_klein_quality": ModelPreset(
+        name="flux2_klein_quality",
+        model_id_or_path="black-forest-labs/FLUX.2-klein-4B",
+        t_index_list=[1, 2, 3, 4, 5, 6],
+        mode="img2img",
+        pipeline="flux2_klein",
+        acceleration="none",
+        frame_buffer_size=2,
+        use_lcm_lora=False,
+        use_tiny_vae=False,
+        cfg_type="none",
+        use_denoising_batch=False,
+        warmup=3,
+    ),
+    "flux2_klein_9b": ModelPreset(
+        name="flux2_klein_9b",
+        model_id_or_path="black-forest-labs/FLUX.2-klein-9B",
+        t_index_list=[1, 2, 3, 4],
+        mode="img2img",
+        pipeline="flux2_klein",
+        acceleration="none",
+        frame_buffer_size=1,
+        use_lcm_lora=False,
+        use_tiny_vae=False,
+        cfg_type="none",
+        use_denoising_batch=False,
+        warmup=2,
+    ),
 }
 
 
@@ -102,12 +153,81 @@ class BridgeConfig:
     video_backend: Literal["ndi", "mock"] = "ndi"
     drop_stale_frames: bool = True
     acceleration: Acceleration | None = None
+    frame_buffer_size: int | None = None
+    flux_transformer_engine: bool = True
     upscale_enabled: bool = False
     upscale_factor: int = 2
     upscale_method: Literal["bicubic", "realesrgan", "maxine-vsr"] = "maxine-vsr"
     upscale_half: bool = True
     upscale_maxine_quality: str = "medium"
     upscale_model: str | None = None
+
+    def effective_frame_buffer_size(self) -> int:
+        if self.frame_buffer_size is not None:
+            return self.frame_buffer_size
+        preset = PRESETS.get(self.preset)
+        return preset.frame_buffer_size if preset else 1
+
+    def effective_acceleration(self) -> str:
+        if self.acceleration is not None:
+            return self.acceleration
+        preset = PRESETS.get(self.preset)
+        return preset.acceleration if preset else "tensorrt"
+
+    def output_resolution(self) -> tuple[int, int]:
+        if self.upscale_enabled:
+            return self.width * self.upscale_factor, self.height * self.upscale_factor
+        return self.width, self.height
+
+    def print_startup_settings(self) -> None:
+        preset_entry = PRESETS.get(self.preset)
+        pipeline = preset_entry.pipeline if preset_entry else "unknown"
+        model = preset_entry.model_id_or_path if preset_entry else "unknown"
+        frame_buffer = self.effective_frame_buffer_size()
+        frame_buffer_src = "explicit" if self.frame_buffer_size is not None else "preset default"
+        acceleration = self.effective_acceleration()
+        out_w, out_h = self.output_resolution()
+
+        if self.flux_transformer_engine:
+            flux_engine = "on (Blackwell bfloat16 + torch.compile)"
+        else:
+            flux_engine = "off (float16 eager)"
+
+        if self.upscale_enabled:
+            upscale = f"on x{self.upscale_factor} ({self.upscale_method}"
+            if self.upscale_method == "maxine-vsr":
+                upscale += f", quality {self.upscale_maxine_quality}"
+            elif self.upscale_method == "realesrgan" and self.upscale_half:
+                upscale += ", fp16"
+            upscale += ")"
+        else:
+            upscale = "off"
+
+        lines = [
+            "",
+            "=== sdtd-bridge settings ===",
+            f"  preset:              {self.preset}",
+            f"  pipeline:            {pipeline}",
+            f"  model:               {model or '(passthrough)'}",
+            f"  mode:                {preset_entry.mode if preset_entry else 'unknown'}",
+            f"  prompt:              {self.prompt}",
+            f"  infer resolution:    {self.width} x {self.height}",
+            f"  output resolution:   {out_w} x {out_h}",
+            f"  frame_buffer_size:   {frame_buffer} ({frame_buffer_src})",
+            f"  flux_transformer:    {flux_engine}",
+            f"  acceleration:        {acceleration}",
+            f"  upscale:             {upscale}",
+            f"  video backend:       {self.video_backend}",
+            f"  NDI in:              {self.input_name}",
+            f"  NDI out:             {self.output_name}",
+            f"  stream id:           {self.stream_id}",
+            f"  REST API:            :{self.daydream_port}/v1/streams/{self.stream_id}",
+            f"  WebSocket control:   :{self.control_port}/control",
+            "",
+        ]
+        if preset_entry and preset_entry.t_index_list:
+            lines.insert(7, f"  t_index_list:        {preset_entry.t_index_list}")
+        print("\n".join(lines), flush=True)
 
 
 @dataclass

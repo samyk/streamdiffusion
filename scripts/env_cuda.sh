@@ -45,3 +45,14 @@ _CUDA_LIB_DIRS="$(_cuda_lib_dirs)"
 if [[ -n "${_CUDA_LIB_DIRS}" ]]; then
   export LD_LIBRARY_PATH="${_CUDA_LIB_DIRS}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
+
+# Hugging Face gated models (FLUX.2 Klein 9B, etc.) need a token in non-interactive sessions.
+if [[ -z "${HF_TOKEN:-}" ]]; then
+  if [[ -f "${HOME}/.cache/huggingface/token" ]]; then
+    HF_TOKEN="$(tr -d '[:space:]' < "${HOME}/.cache/huggingface/token")"
+    export HF_TOKEN
+  elif [[ -f "${HOME}/.huggingface/token" ]]; then
+    HF_TOKEN="$(tr -d '[:space:]' < "${HOME}/.huggingface/token")"
+    export HF_TOKEN
+  fi
+fi
