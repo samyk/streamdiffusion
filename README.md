@@ -1,9 +1,16 @@
-# StreamDiffusion TouchDesigner Bridge
+# StreamDiffusion ↔ TouchDesigner (NDI)
 
-Python bridge that receives video from TouchDesigner over NDI, runs real-time
-diffusion on a Linux NVIDIA GPU box, sends processed frames back over NDI, and
-accepts live controls from TouchDesigner over WebSocket or the Daydream-style
-REST API.
+Real-time img2img / v2v on a Linux GPU box (**hal**). TouchDesigner sends camera video over NDI and controls everything from **`hal_control`** — no CLI needed during performance.
+
+Run real-time StreamDiffusion with video input + prompts on a networked Linux
+machine while controlling it remotely from TouchDesigner (Mac/Windows) live.
+
+960x540 cam diffusion receives **27 FPS @ 1920x1080** w/SD Turbo Quality model +
+2x video upscaling (1920x1080) via maxine-vsr on NVIDIA RTX Pro 6000 Blackwell
+running on same network.
+
+Video is sent and received over NDI, and controls are sent over WebSocket or
+the Daydream-style REST API.
 
 Supported inference paths:
 
@@ -17,356 +24,204 @@ Post-processing:
 - **Real-ESRGAN** — sharper, slower (`realesrgan`)
 - **Bicubic** — fastest (`bicubic`)
 
-## Linux Setup (Blackwell)
+## TouchDesigner setup
 
-On the RTX 6000 Blackwell Linux machine:
+You can use `toe/sdremote1.toe` out the gate.
+- Adjust vidin for video input.
+- Control all features from `hal_control`, or use "View" on `hal_control_ui`
 
-```bash
-sudo apt-get update
-sudo apt-get install -y python3-venv python3-dev avahi-daemon curl
-./scripts/setup_blackwell_linux.sh
-```
+### Alternatively adding to existing TouchDesigner setup
 
-Blackwell needs CUDA 13.2 PyTorch nightly (`cu132`) with `sm_120`:
-
-```bash
-sdtd-verify-gpu
-sdtd-verify-inference
-```
-
-Repair mismatched wheels:
-
-```bash
-./scripts/install_pytorch_cu132.sh
-./scripts/fix_inference_deps.sh
-```
-
-StreamDiffusion on Blackwell uses **TensorRT** by default (`acceleration=tensorrt` in
-`streamdiffusion_td_bridge/defaults.py` and TD `hal_control`). FLUX.2 Klein still uses
-`acceleration=none` (separate pipeline).
-
-### Optional stacks
-
-```bash
-# GPU upscale (Maxine VSR + Real-ESRGAN fallback)
-./scripts/install_upscaler_deps.sh
-
-# FLUX.2 Klein (upgrades diffusers; accept HF model license first)
-./scripts/install_flux2_klein_deps.sh
-```
-
-To return to the SD-only diffusers pin after trying FLUX:
-
-```bash
-./scripts/fix_inference_deps.sh
-```
-
-## Quick Start
-
-### Passthrough (no model)
-
-```bash
-./scripts/run_passthrough.sh
-```
-
-TD: send `td_streamdiffusion_in`, receive `streamdiffusion_out`.
-
-### StreamDiffusion (default)
-
-```bash
-./scripts/run_bridge_screen.sh "your prompt"
-# or
-sdtd-bridge --preset sdxl_turbo_fast --width 768 --height 768 \
-  --acceleration tensorrt --prompt "your prompt"
-```
-
-### FLUX.2 Klein
-
-```bash
-./scripts/install_flux2_klein_deps.sh
-
-sdtd-bridge \
-  --preset flux2_klein_fast \
-  --width 768 --height 768 \
-  --acceleration none \
-  --prompt "your prompt"
-```
-
-### With GPU upscale
-
-```bash
-SDTD_UPSCALE=1 ./scripts/run_bridge_screen.sh
-# default: maxine-vsr, quality medium, x2 upscale
-```
-
-## Resolutions
-
-| Setting | What it controls |
-|---|---|
-| `--width` / `--height` | Inference resolution. NDI **in** is resized to this. |
-| `SDTD_UPSCALE=1` | Enable post-inference upscale |
-| `SDTD_UPSCALE_FACTOR=2` | NDI **out** = infer × factor (2 or 4) |
-
-Examples:
-
-| Infer | Upscale | NDI out |
-|---|---|---|
-| 768×768 | off | 768×768 |
-| 768×768 | x2 | 1536×1536 |
-| 512×512 | x2 | 1024×1024 |
-
-Env vars (instance A):
-
-```bash
-SDTD_WIDTH=512 SDTD_HEIGHT=512 SDTD_UPSCALE=1 ./scripts/run_bridge_screen.sh
-```
-
-Instance B overrides: `SDTD_WIDTH_B`, `SDTD_HEIGHT_B`, etc.
-
-Runtime check:
-
-```bash
-curl -s http://hal:8780/v1/streams/remote-1 | jq '.runtime | {width, height, extra}'
-```
-
-## Presets
-
-| Preset | Pipeline | Model | Notes |
-|---|---|---|---|
-| `sdxl_turbo_fast` | StreamDiffusion | SDXL Turbo | Default on hal |
-| `sdxl_turbo_quality` | StreamDiffusion | SDXL Turbo | 2-step |
-| `sd_turbo_fast` | StreamDiffusion | SD Turbo | |
-| `sd_turbo_quality` | StreamDiffusion | SD Turbo | 2-step |
-| `lcm_lora_style` | StreamDiffusion | SD1.5 + LCM | |
-| `flux2_klein_fast` | FLUX.2 Klein | 4B | 4 steps, img2img |
-| `flux2_klein_quality` | FLUX.2 Klein | 4B | 6 steps, frame_batch=2 |
-| `flux2_klein_9b` | FLUX.2 Klein | 9B | Higher quality |
-| `passthrough` | none | — | NDI loopback |
-
-## CLI Options
-
-```bash
-sdtd-bridge --help
-```
-
-### Core
-
-| Flag | Default | Description |
-|---|---|---|
-| `--preset` | `sd_turbo_fast` | Model preset (see table) |
-| `--width` / `--height` | 512 | Inference resolution |
-| `--prompt` | `""` | Initial prompt |
-| `--negative-prompt` | `""` | Negative prompt |
-| `--guidance-scale` | 1.1 | CFG scale |
-| `--delta` | 1.0 | RCFG delta |
-| `--seed` | 2 | Seed |
-| `--acceleration` | `tensorrt` | `none`, `xformers`, `tensorrt` |
-| `--engine-dir` | `engines` | TensorRT cache dir |
-| `--passthrough-test` | off | Skip model load |
-
-### Stream batch
-
-| Flag | Default | Description |
-|---|---|---|
-| `--frame-buffer-size` | preset | StreamDiffusion `frame_buffer_size` / stream batch depth |
-
-Higher values increase temporal smoothing and batch throughput on SD presets.
-Reloads the model when changed live.
-
-### FLUX.2 Klein
-
-| Flag | Default | Description |
-|---|---|---|
-| `--flux-transformer-engine` | on | Blackwell: `torch.compile` transformer + bfloat16 |
-| `--no-flux-transformer-engine` | — | Use float16 eager mode instead |
-
-### Upscale
-
-| Flag | Default | Description |
-|---|---|---|
-| `--upscale` | off | Enable post-inference upscale |
-| `--upscale-factor` | 2 | 1, 2, or 4 |
-| `--upscale-method` | `maxine-vsr` | `maxine-vsr`, `realesrgan`, `bicubic` |
-| `--upscale-maxine-quality` | `medium` | `low`…`ultra`, `highbitrate_*` |
-| `--upscale-half` / `--no-upscale-half` | on | Real-ESRGAN fp16 |
-
-### NDI / API
-
-| Flag | Default | Description |
-|---|---|---|
-| `--input-name` | `td_streamdiffusion_in` | NDI source |
-| `--output-name` | `streamdiffusion_out` | NDI sender |
-| `--stream-id` | `remote-1` | REST stream id |
-| `--daydream-port` | 8780 | REST API port |
-| `--control-port` | 8765 | WebSocket control |
-| `--video-backend` | `ndi` | `ndi` or `mock` |
-
-## Launch Scripts (hal)
-
-```bash
-# Instance A (default)
-./scripts/run_bridge_screen.sh
-./scripts/run_bridge_screen.sh "prompt"
-
-# Instance A + B
-./scripts/run_bridge_screen.sh --dual "prompt A" "prompt B"
-
-# Env overrides
-SDTD_PRESET=flux2_klein_fast \
-SDTD_WIDTH=768 SDTD_HEIGHT=768 \
-SDTD_UPSCALE=1 \
-SDTD_UPSCALE_METHOD=maxine-vsr \
-SDTD_UPSCALE_MAXINE_QUALITY=high \
-SDTD_UPSCALE_FACTOR=2 \
-SDTD_FRAME_BUFFER_SIZE=2 \
-./scripts/run_bridge_screen.sh
-```
-
-| Env var | Description |
-|---|---|
-| `SDTD_PRESET` | Preset name |
-| `SDTD_WIDTH` / `SDTD_HEIGHT` | Inference res |
-| `SDTD_UPSCALE` | `1` = enable upscale |
-| `SDTD_UPSCALE_FACTOR` | 2 or 4 |
-| `SDTD_UPSCALE_METHOD` | `maxine-vsr`, `realesrgan`, `bicubic` |
-| `SDTD_UPSCALE_MAXINE_QUALITY` | Maxine quality preset |
-| `SDTD_UPSCALE_HALF` | `0` = disable Real-ESRGAN fp16 |
-| `SDTD_FRAME_BUFFER_SIZE` | Stream batch depth (reloads model) |
-| `SDTD_FLUX_TRANSFORMER_ENGINE` | `0` = float16 eager FLUX path |
-| `SDTD_DUAL` | `1` = launch A+B |
-| `SDTD_PROMPT_B` | Instance B prompt |
-
-Instance B also supports `SDTD_PRESET_B`, `SDTD_WIDTH_B`, `SDTD_HEIGHT_B`.
-
-## REST API (Daydream-compatible)
-
-Default: `http://hal:8780/v1/streams/remote-1`
-
-```bash
-# Status
-curl http://hal:8780/v1/streams/remote-1
-
-# Hot-update params
-curl -X PATCH http://hal:8780/v1/streams/remote-1 \
-  -H 'Content-Type: application/json' \
-  -d '{"params": {
-    "preset": "flux2_klein_fast",
-    "prompt": "liquid chrome orchid",
-    "width": 768,
-    "height": 768,
-    "frame_buffer_size": 2,
-    "flux_transformer_engine": true,
-    "upscale_enabled": true,
-    "upscale_method": "maxine-vsr",
-    "upscale_factor": 2,
-    "upscale_maxine_quality": "medium",
-    "acceleration": "none"
-  }}'
-```
-
-Key REST params:
-
-| Param | Description |
-|---|---|
-| `preset` | Preset name |
-| `prompt` / `prompts` | Text prompt(s) |
-| `negative_prompt` | Negative prompt |
-| `t_index_list` | Denoise steps |
-| `width` / `height` | Resolution |
-| `guidance_scale`, `delta`, `seed` | Quality controls |
-| `acceleration` | `none` / `xformers` / `tensorrt` |
-| `frame_buffer_size` | Stream batch depth |
-| `flux_transformer_engine` | FLUX Blackwell compile on/off |
-| `upscale_enabled` | Toggle upscale |
-| `upscale_method` | Upscale backend |
-| `upscale_factor` | 2 or 4 |
-| `upscale_maxine_quality` | Maxine preset |
-| `paused` | `true` = passthrough |
-| `loras` | LoRA list (SD presets) |
-
-## WebSocket Control
-
-```text
-ws://<linux-box>:8765/control
-```
-
-```json
-{ "type": "set_prompt", "prompt": "liquid chrome orchid" }
-{ "type": "set_frame_buffer", "frame_buffer_size": 2 }
-{ "type": "set_flux_transformer_engine", "enabled": false }
-{ "type": "load_model", "preset": "flux2_klein_fast", "width": 768, "height": 768 }
-{ "type": "set_upscale", "enabled": true, "method": "maxine-vsr", "factor": 2 }
-```
-
-Status snapshots (1 Hz) include `extra.pipeline`, `extra.frame_buffer_size`,
-`extra.flux_transformer_engine`, `extra.upscale_runtime`, `extra.output_width`.
-
-## TouchDesigner
-
-See `touchdesigner/README.md` and `touchdesigner/DUAL_INSTANCES.md`.
-
-Build HAL control UI:
+**Build control UI** (once, or after repo updates):
 
 ```python
-exec(open(".../touchdesigner/build_hal_control.py", encoding="utf-8").read())
+exec(open("/Users/samy/c/touch/samysd/touchdesigner/build_hal_control.py", encoding="utf-8").read())
 ```
 
-HAL control exposes:
+**Upgrade existing UI** (add new params without destroying the COMP):
 
-- Preset (including FLUX.2 Klein)
-- Width / Height
-- Frame Batch Count
-- FLUX Blackwell Transformer Engine toggle
-- Denoise steps, guidance, seed, acceleration
-- Prompt / negative prompt
+```python
+exec(open("/Users/samy/c/touch/samysd/touchdesigner/upgrade_hal_control.py", encoding="utf-8").read())
+```
 
-Helper:
+**On hal** — start the bridge (once per session):
 
 ```bash
-sdtd-touchdesigner-helper
+./scripts/run_bridge_screen.sh "optional initial prompt"
 ```
 
-## Dual Instances
+Changes in `hal_control` sync automatically (~350ms debounce). Use **Push All** to force a full sync.
 
-| | Instance A | Instance B |
-|---|---|---|
-| NDI in | `td_streamdiffusion_in` | `td_streamdiffusion_in_b` |
-| NDI out | `streamdiffusion_out` | `streamdiffusion_out_b` |
-| REST | `:8780/remote-1` | `:8781/remote-2` |
-| screen | `sdtd-bridge` | `sdtd-bridge-b` |
+| TD node | Path (instance A) |
+|---|---|
+| Control COMP | `/project1/hal_control` |
+| Control panel | `/project1/hal_control_ui` |
+| NDI send | `td_streamdiffusion_in` |
+| NDI receive | `streamdiffusion_out` |
+| API | `http://<hal-ip>:8780/v1/streams/remote-1` |
+
+Dual instances: see `touchdesigner/DUAL_INSTANCES.md`.
+
+---
+
+## Features (all controlled from TouchDesigner)
+
+Everything below lives on **`hal_control`** unless noted.
+
+### Connection
+| TD parameter | What it does |
+|---|---|
+| Remotehost, Remoteport, Streamid | Which hal + stream to PATCH |
+| Push All | Force full param sync |
+
+### Prompt
+| TD parameter | What it does |
+|---|---|
+| Prompt | Main text prompt |
+| Negativeprompt | Negative prompt |
+| Prompt2, Prompt2weight | Second prompt + blend weight |
+| Promptinterp | Multi-prompt blend mode |
+
+### Denoise / strength
+| TD parameter | What it does |
+|---|---|
+| Denoise | Primary denoise step (turbo: t_index 15–49; Klein/SD3.5: step count 1–6) |
+| Step2, Step3, Step4 | Extra denoise steps (`0` = off). Turbo: additional t_index values. **v2v needs Step2 > 0.** |
+
+### Model & mode
+| TD parameter | What it does |
+|---|---|
+| Preset | Model + pipeline preset (see table below) |
+| Modelid | Custom HF id or `.safetensors` path (optional) |
+| Sdmode | `img2img`, `txt2img`, `v2v`, `passthrough` |
+| Acceleration | `tensorrt` / `xformers` / `none` — **SD Turbo / SDXL only** |
+| Attentionbackend | `auto` / flash / sage / xformers / sdpa / none — **FLUX & SD3.5 DiT** |
+
+### Quality
+| TD parameter | What it does |
+|---|---|
+| Width, Height | Inference resolution (NDI in is resized; snapped to ÷8 turbo / ÷16 DiT) |
+| Framebatch | Temporal batch depth — **keep at 1 for turbo v2v**; used by FLUX quality / DiT |
+| Fluxtransformerengine | Blackwell `torch.compile` for FLUX / SD3.5 |
+| Modeloptenabled, Modeloptcheckpoint | Optional ModelOpt quant (SD3.5) |
+| Guidance, Delta, Seed | CFG / RCFG / seed |
+| Usetinyvae, Vaeid | Tiny VAE on/off (v2v auto uses full VAE on hal) |
+
+### LoRA (SD presets)
+| TD parameter | What it does |
+|---|---|
+| Lora1–3 path + scale | Up to 3 LoRAs |
+
+### Upscale (post-inference, GPU)
+| TD parameter | What it does |
+|---|---|
+| Upscaleenabled | On/off |
+| Upscalefactor | 1× / 2× / 4× |
+| Upscalemethod | `maxine-vsr` (NVIDIA), `realesrgan`, `bicubic` |
+| Upscalemaxinequality | Maxine quality preset |
+| Upscalehalf | Real-ESRGAN FP16 |
+| Upscalemodel | Custom `.pth` path |
+
+### V2V / person segmentation
+| TD parameter | What it does |
+|---|---|
+| Sdmode = v2v | Temporal img2img (needs **Step2 > 0**, Framebatch = 1 on turbo) |
+| Segmentenabled | GPU person mask (CUDA DeepLab on Blackwell) |
+| Persononly | Style people only; keep camera background |
+| Cutbackground | Replace background with solid color |
+| Segmentfeather | Mask edge soften |
+| Backgroundcolor | Cutout color `#RRGGBB` or `R,G,B` |
+| Segmentbackend | `auto` / `maxine` / `cuda` |
+
+### Advanced
+| TD parameter | What it does |
+|---|---|
+| Filterthreshold, Filterskip | Skip near-identical frames (0 = off) |
+| Pausestream | Passthrough raw NDI (no model) |
+| Ipimagepath, Ipscale, Ipmodel | IP-Adapter *(UI wired; needs TRT implementation)* |
+| Controlnetmodel, Controlnetscale | ControlNet *(UI wired; needs TRT implementation)* |
+
+### Display *(TouchDesigner HUD only — does not sync to hal)*
+| TD parameter | What it does |
+|---|---|
+| Pipscale, Textscale, Textlift | PiP + overlay text layout on `vidout/combine` |
+
+---
+
+## Supported models
+
+| Preset | Model | Pipeline | Default accel |
+|---|---|---|---|
+| `sd_turbo_fast` | [stabilityai/sd-turbo](https://huggingface.co/stabilityai/sd-turbo) | StreamDiffusion | TensorRT |
+| `sd_turbo_quality` | stabilityai/sd-turbo | StreamDiffusion (2-step) | TensorRT |
+| `sdxl_turbo_fast` | [stabilityai/sdxl-turbo](https://huggingface.co/stabilityai/sdxl-turbo) | StreamDiffusion | TensorRT |
+| `sdxl_turbo_quality` | stabilityai/sdxl-turbo | StreamDiffusion (2-step) | TensorRT |
+| `lcm_lora_style` | [runwayml/stable-diffusion-v1-5](https://huggingface.co/runwayml/stable-diffusion-v1-5) + LCM LoRA | StreamDiffusion | TensorRT |
+| `flux2_klein_fast` | [FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) | FLUX Klein | none + attention backend |
+| `flux2_klein_quality` | FLUX.2-klein-4B | FLUX Klein | none + attention backend |
+| `flux2_klein_9b` | [FLUX.2-klein-9B](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B) | FLUX Klein | none + attention backend |
+| `sd35_medium_fast` | [stable-diffusion-3.5-medium](https://huggingface.co/stabilityai/stable-diffusion-3.5-medium) | DiT | none + attention backend |
+| `sd35_medium_quality` | stable-diffusion-3.5-medium | DiT | none + attention backend |
+| `sd35_large_fast` | [stable-diffusion-3.5-large](https://huggingface.co/stabilityai/stable-diffusion-3.5-large) | DiT | none + attention backend |
+| `passthrough` | — | NDI loopback | — |
+
+Custom checkpoint: set **Modelid** to a HuggingFace id or local `.safetensors` path.
+
+**HF licenses required:** FLUX.2 Klein, SD3.5 Medium/Large.
+
+---
+
+## Hal setup (once)
+
+Blackwell / CUDA 13.2:
 
 ```bash
-./scripts/run_bridge_screen.sh --dual
+./scripts/setup_blackwell_linux.sh
+./scripts/install_streamdiffusion_deps.sh
+./scripts/install_tensorrt_deps.sh
+./scripts/install_upscaler_deps.sh          # Maxine VSR
+./scripts/install_attention_deps.sh         # xformers / flash
+./scripts/install_flux2_klein_deps.sh       # optional
+./scripts/install_dit_deps.sh               # SD3.5 optional
+./scripts/install_segmentation_deps.sh      # person mask optional
 ```
 
-## Latency Probe
+Deploy code changes from Mac:
 
 ```bash
-sdtd-latency-probe --video-backend mock --preset passthrough --seconds 5
-sdtd-latency-probe --video-backend ndi --preset passthrough --seconds 10
+./scripts/sync_to_hal.sh
 ```
+
+---
+
+## CLI / env (optional — launch only)
+
+Bridge defaults match TD instance A (`sd_turbo_fast`, 960×536, TensorRT, 2× Maxine).
+
+```bash
+./scripts/run_bridge_screen.sh "prompt"
+SDTD_PRESET=sd_turbo_quality SDTD_ACCELERATION=tensorrt ./scripts/run_bridge_screen.sh
+```
+
+Status:
+
+```bash
+curl -s http://hal:8780/v1/streams/remote-1 | jq '{status: .runtime.status, mode: .runtime.mode, fps: .runtime.fps_out, t: .runtime.t_index_list}'
+```
+
+WebSocket control (`:8765`) still works; **TouchDesigner uses REST** via `hal_remote_sync`.
+
+---
 
 ## Troubleshooting
 
-| Issue | Fix |
+| Problem | Fix |
 |---|---|
-| `No module named 'diffusers'` | `./scripts/fix_inference_deps.sh` |
-| `sm_120` missing | `./scripts/install_pytorch_cu132.sh` |
-| FLUX import error | `./scripts/install_flux2_klein_deps.sh` |
-| SD broken after FLUX install | `./scripts/fix_inference_deps.sh` |
-| NDI not found | `avahi-daemon`, check VLAN multicast |
-| Slow upscale | `SDTD_UPSCALE_METHOD=maxine-vsr` or infer at 512 |
-| TensorRT engine build fails | Check `engines/` cache; try `--acceleration xformers` temporarily |
+| TD changes ignored | Run `upgrade_hal_control.py`; pulse **Push All** |
+| v2v looks same as img2img | Set **Step2 > 0** (Step2=0 = identical to img2img) |
+| v2v flicker | Keep Step2 within ~8 of Denoise; avoid tiny VAE (auto-off in v2v) |
+| TensorRT batch error | Framebatch = 1 on turbo; reload preset after mode change |
+| FLUX / SD3.5 missing | Run install scripts + accept HF license |
+| Slow upscale | Use `maxine-vsr`; or infer smaller |
 
-## Project Layout
-
-```
-streamdiffusion_td_bridge/   # bridge service
-  vendor/wrapper.py          # StreamDiffusion wrapper
-  vendor/flux_klein_wrapper.py  # optional FLUX.2 Klein path
-  maxine_upscaler.py         # NVIDIA Maxine VSR
-  upscaler.py                # upscale factory
-scripts/                     # setup + launch scripts
-touchdesigner/               # TD builders + HAL remote sync
-engines/                     # TensorRT + Real-ESRGAN weights
-```
+More detail: `touchdesigner/README.md`, `touchdesigner/SDTD_REMOTE.md`.

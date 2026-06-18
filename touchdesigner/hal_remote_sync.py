@@ -71,11 +71,13 @@ def _klein_steps(denoise, step2=0, step3=0, step4=0):
 
 
 def _turbo_steps(denoise, step2=0, step3=0, step4=0):
-    steps = [max(1, min(49, int(denoise)))]
+    from streamdiffusion_td_bridge.control import normalize_turbo_t_index_list
+
+    raw = [max(1, min(49, int(denoise)))]
     for value in (step2, step3, step4):
         if int(value) > 0:
-            steps.append(max(1, min(49, int(value))))
-    return steps
+            raw.append(max(1, min(49, int(value))))
+    return normalize_turbo_t_index_list(raw)
 
 
 def _steps(ctrl):

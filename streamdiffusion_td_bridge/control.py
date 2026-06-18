@@ -45,6 +45,19 @@ def denoise_to_t_index(value: float, *, normalized: bool = False) -> int:
     return clamp_t_index(value)
 
 
+def normalize_turbo_t_index_list(values: list[int]) -> list[int]:
+    """Drop duplicate steps and invalid zeros. [32,32] -> [32] (img2img, not v2v)."""
+    out: list[int] = []
+    for raw in values:
+        step = clamp_t_index(float(raw))
+        if step <= 0:
+            continue
+        if out and step == out[-1]:
+            continue
+        out.append(step)
+    return out
+
+
 def parse_t_index_list(command: dict[str, Any]) -> list[int]:
     if "t_index_list" in command:
         return [clamp_t_index(float(v)) for v in command["t_index_list"]]

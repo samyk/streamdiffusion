@@ -23,6 +23,7 @@ from .config import (
 from .composite import apply_segmentation_composite, parse_background_color
 from .control import (
     normalize_resolution_for_preset,
+    normalize_turbo_t_index_list,
     parse_prompt_entries,
     parse_t_index_list,
 )
@@ -479,6 +480,11 @@ class StreamWorker:
         raise ValueError(f"Unknown command type: {ctype!r}")
 
     def _update_t_index_list(self, t_index_list: list[int]) -> None:
+        if not is_transformer_preset(
+            pipeline=self.active_preset.pipeline,
+            name=self.active_preset.name,
+        ):
+            t_index_list = normalize_turbo_t_index_list([int(v) for v in t_index_list])
         if not self._valid_t_index_list(t_index_list):
             reason = self._t_index_invalid_reason(t_index_list)
             self._ignore_td("t_index_list", t_index_list, reason)
@@ -701,6 +707,9 @@ class StreamWorker:
                 next_preset = PRESETS[preset_name]
                 t_index_list = command.get("t_index_list") or previous_t_index
                 proposed = [int(v) for v in t_index_list]
+                if not is_transformer_preset(pipeline=next_preset.pipeline, name=next_preset.name):
+                    proposed = normalize_turbo_t_index_list(proposed)
+                    t_index_list = proposed
                 if command.get("t_index_list") and not self._valid_t_index_list(
                     proposed,
                     preset=next_preset,

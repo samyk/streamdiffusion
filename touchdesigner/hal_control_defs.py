@@ -160,11 +160,13 @@ def turbo_steps_from_denoise(
     step3: int = 0,
     step4: int = 0,
 ) -> list[int]:
-    steps = [max(1, min(49, int(denoise)))]
+    from streamdiffusion_td_bridge.control import normalize_turbo_t_index_list
+
+    raw = [max(1, min(49, int(denoise)))]
     for value in (step2, step3, step4):
         if int(value) > 0:
-            steps.append(max(1, min(49, int(value))))
-    return steps
+            raw.append(max(1, min(49, int(value))))
+    return normalize_turbo_t_index_list(raw)
 
 
 def denoise_steps_from_control(ctrl, preset: str | None = None) -> list[int]:

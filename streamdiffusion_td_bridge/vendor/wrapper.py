@@ -196,6 +196,12 @@ class StreamDiffusionWrapper:
         )
 
         stream = self.stream
+        if (
+            list(stream.t_list) == list(t_index_list)
+            and int(stream.frame_bff_size) == frame_buffer_size
+        ):
+            return
+
         stream.t_list = list(t_index_list)
         stream.denoising_steps_num = len(t_index_list)
         stream.frame_bff_size = frame_buffer_size
@@ -255,16 +261,19 @@ class StreamDiffusionWrapper:
         old_embeds = getattr(stream, "prompt_embeds", None)
 
         if stream.denoising_steps_num > 1:
-            stream.x_t_latent_buffer = torch.zeros(
-                (
-                    (stream.denoising_steps_num - 1) * stream.frame_bff_size,
-                    4,
-                    stream.latent_height,
-                    stream.latent_width,
-                ),
-                dtype=stream.dtype,
-                device=stream.device,
+            buf_shape = (
+                (stream.denoising_steps_num - 1) * stream.frame_bff_size,
+                4,
+                stream.latent_height,
+                stream.latent_width,
             )
+            old_buf = getattr(stream, "x_t_latent_buffer", None)
+            if old_buf is None or tuple(old_buf.shape) != buf_shape:
+                stream.x_t_latent_buffer = torch.zeros(
+                    buf_shape,
+                    dtype=stream.dtype,
+                    device=stream.device,
+                )
         else:
             stream.x_t_latent_buffer = None
 
