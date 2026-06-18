@@ -69,7 +69,7 @@ PRESETS: dict[str, ModelPreset] = {
     "sd_turbo_quality": ModelPreset(
         name="sd_turbo_quality",
         model_id_or_path="stabilityai/sd-turbo",
-        t_index_list=[32, 45],
+        t_index_list=[32, 36],
         mode="img2img",
         acceleration="tensorrt",
         use_lcm_lora=False,
@@ -96,7 +96,7 @@ PRESETS: dict[str, ModelPreset] = {
     "sdxl_turbo_quality": ModelPreset(
         name="sdxl_turbo_quality",
         model_id_or_path="stabilityai/sdxl-turbo",
-        t_index_list=[32, 45],
+        t_index_list=[32, 36],
         mode="img2img",
         acceleration="tensorrt",
         use_lcm_lora=False,

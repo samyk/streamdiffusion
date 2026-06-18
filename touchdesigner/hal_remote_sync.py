@@ -94,9 +94,9 @@ def _steps(ctrl):
     }
     preset_steps = {
         "sdxl_turbo_fast": [35],
-        "sdxl_turbo_quality": [32, 45],
+        "sdxl_turbo_quality": [32, 36],
         "sd_turbo_fast": [35],
-        "sd_turbo_quality": [32, 45],
+        "sd_turbo_quality": [32, 36],
         "lcm_lora_style": [0, 16, 32, 45],
         "flux2_klein_fast": [1, 2, 3, 4],
         "flux2_klein_quality": [1, 2, 3, 4, 5, 6],

@@ -119,9 +119,9 @@ KLEIN_MAX_STEPS = 6
 
 PRESET_DENOISE_STEPS = {
     "sdxl_turbo_fast": [35],
-    "sdxl_turbo_quality": [32, 45],
+    "sdxl_turbo_quality": [32, 36],
     "sd_turbo_fast": [28],
-    "sd_turbo_quality": [32, 45],
+    "sd_turbo_quality": [32, 36],
     "lcm_lora_style": [0, 16, 32, 45],
     "flux2_klein_fast": [1, 2, 3, 4],
     "flux2_klein_quality": [1, 2, 3, 4],

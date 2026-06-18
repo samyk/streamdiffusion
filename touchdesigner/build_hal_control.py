@@ -151,7 +151,7 @@ ctrl.par.Width = TD_HAL_DEFAULTS["Width"]
 _start_section("Width")
 pg.appendInt("Height", label="Height")
 ctrl.par.Height = TD_HAL_DEFAULTS["Height"]
-framebatch = pg.appendInt("Framebatch", label="Frame Batch Count")
+framebatch = pg.appendInt("Framebatch", label="Frame Batch (turbo v2v: keep 1; multi-step = temporal)")
 framebatch.normMin = 1
 framebatch.normMax = 8
 ctrl.par.Framebatch = TD_HAL_DEFAULTS["Framebatch"]

@@ -415,11 +415,11 @@ class StreamWorker:
         if ctype == "set_frame_buffer":
             frame_buffer_size = max(1, int(command.get("frame_buffer_size", command.get("value", 1))))
             if not self._valid_frame_buffer_request(frame_buffer_size):
-                self._ignore_td(
-                    "frame_buffer_size",
-                    frame_buffer_size,
-                    "needs multiple denoise steps on StreamDiffusion (use Framebatch=1 for turbo)",
+                reason = (
+                    "StreamDiffusion turbo v2v uses frame_buffer=1; "
+                    "use Step2-4 for temporal denoise (Framebatch>1 only for DiT/FLUX)"
                 )
+                self._ignore_td("frame_buffer_size", frame_buffer_size, reason)
                 return
             if frame_buffer_size == self.config.frame_buffer_size:
                 return
@@ -612,6 +612,8 @@ class StreamWorker:
         if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
             return True
         steps = t_index_list if t_index_list is not None else list(self.active_preset.t_index_list)
+        if len(steps) > 1 and requested > 1:
+            return False
         if len(steps) <= 1 and requested > 1:
             return False
         return True
@@ -876,9 +878,21 @@ class StreamWorker:
         self.state.update(extra=extra)
         self._apply_infer_resolution(self.config.width, self.config.height)
         infer_w, infer_h = self.config.width, self.config.height
+        t_index_list = list(self.active_preset.t_index_list)
+        load_tiny_vae = self.use_tiny_vae
+        do_add_noise = True
+        if self.active_preset.mode == "v2v" and not is_transformer_preset(
+            pipeline=self.active_preset.pipeline,
+            name=self.active_preset.name,
+        ):
+            t_index_list = self._stabilize_v2v_t_index(t_index_list)
+            do_add_noise = False
+            if load_tiny_vae:
+                load_tiny_vae = False
+                print("[sdtd] v2v: using full VAE (tiny VAE flickers on video)")
         wrapper_kwargs = dict(
             model_id_or_path=self.active_preset.model_id_or_path,
-            t_index_list=self.active_preset.t_index_list,
+            t_index_list=t_index_list,
             lora_dict=self.active_preset.lora_dict,
             mode="img2img" if self.active_preset.mode == "v2v" else self.active_preset.mode,
             output_type="pil",
@@ -889,10 +903,11 @@ class StreamWorker:
             acceleration=acceleration,
             attention_backend=self.config.attention_backend,
             use_lcm_lora=self.active_preset.use_lcm_lora,
-            use_tiny_vae=self.use_tiny_vae,
+            use_tiny_vae=load_tiny_vae,
             vae_id=self.vae_id,
             use_denoising_batch=self.active_preset.use_denoising_batch,
             cfg_type=self.active_preset.cfg_type,
+            do_add_noise=do_add_noise,
             seed=self.seed,
             engine_dir=self.config.engine_dir,
         )
@@ -1017,18 +1032,43 @@ class StreamWorker:
             blended_pooled = torch.stack(pooled_embeds, dim=0).sum(dim=0) / total_weight
             _repeat_added(stream, blended_pooled.to(device=stream.device, dtype=stream.dtype))
 
+    def _stabilize_v2v_t_index(self, t_index_list: list[int], *, max_gap: int = 8) -> list[int]:
+        if len(t_index_list) <= 1:
+            return t_index_list
+        steps = [max(15, min(49, int(v))) for v in t_index_list]
+        stabilized = [steps[0]]
+        for value in steps[1:]:
+            if value - stabilized[-1] > max_gap:
+                value = min(49, stabilized[-1] + max_gap)
+            stabilized.append(value)
+        if stabilized != steps:
+            print(
+                f"[sdtd] v2v: narrowed t_index {steps} -> {stabilized} "
+                f"(large step gaps cause pulsing/flicker)"
+            )
+        return stabilized
+
     def _configure_v2v_mode(self) -> None:
         steps = len(self.active_preset.t_index_list)
-        target = max(1, steps)
-        if self._valid_frame_buffer_request(target):
+        if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+            target = max(1, min(steps, 8))
+            if self._valid_frame_buffer_request(target):
+                if self.config.frame_buffer_size != target:
+                    self.config.frame_buffer_size = target
+                    self.active_preset = replace(self.active_preset, frame_buffer_size=target)
+        else:
+            # StreamDiffusion img2img only ingests one frame per __call__; multi-step
+            # temporal v2v comes from denoising batch at frame_buffer=1. fb>1 with
+            # multiple t_index steps builds TRT engines that never match runtime batch.
+            target = 1
             if self.config.frame_buffer_size != target:
                 self.config.frame_buffer_size = target
                 self.active_preset = replace(self.active_preset, frame_buffer_size=target)
-        elif steps <= 1:
-            print(
-                "[stream_worker] v2v: add Step2-4 or use a quality preset for temporal batching "
-                f"(frame_buffer={self.config.frame_buffer_size}, t_index={self.active_preset.t_index_list})"
-            )
+            if steps <= 1:
+                print(
+                    "[stream_worker] v2v: add Step2-4 or use a quality preset "
+                    f"(t_index={self.active_preset.t_index_list}, frame_buffer=1)"
+                )
         print(
             f"[sdtd] v2v: frame_buffer={self.config.frame_buffer_size} "
             f"t_index={self.active_preset.t_index_list}"
@@ -1084,7 +1124,34 @@ class StreamWorker:
             maxine_quality=self.config.upscale_maxine_quality,
         )
 
+    def _trt_batch_consistent(self) -> bool:
+        if self.wrapper is None or is_transformer_preset(
+            pipeline=self.active_preset.pipeline,
+            name=self.active_preset.name,
+        ):
+            return True
+        if not hasattr(self.wrapper, "trt_batch_matches"):
+            return True
+        return self.wrapper.trt_batch_matches(
+            list(self.active_preset.t_index_list),
+            self.config.frame_buffer_size,
+        )
+
     def _process(self, frame: VideoFrame) -> np.ndarray:
+        if not self._trt_batch_consistent():
+            needed = self.wrapper.trt_unet_batch_size_for(  # type: ignore[union-attr]
+                list(self.active_preset.t_index_list),
+                self.config.frame_buffer_size,
+            )
+            current = int(self.wrapper.stream.trt_unet_batch_size)  # type: ignore[union-attr]
+            print(
+                f"[stream_worker] TensorRT batch mismatch ({current} vs {needed}); reloading"
+            )
+            self.wrapper = None
+            self._needs_reload = True
+            self._last_loaded_signature = None
+            return np.ascontiguousarray(frame.data[:, :, :3])
+
         source_rgb = np.ascontiguousarray(frame.data[:, :, :3])
         if self.active_preset.mode == "passthrough" or self.wrapper is None:
             rgb = source_rgb
