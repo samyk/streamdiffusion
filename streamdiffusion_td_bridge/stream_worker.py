@@ -20,6 +20,7 @@ from .config import (
     is_flux_preset,
     is_transformer_preset,
 )
+from .composite import apply_segmentation_composite, parse_background_color
 from .control import (
     normalize_resolution_for_preset,
     parse_prompt_entries,
@@ -28,6 +29,7 @@ from .control import (
 from .deps import load_wrapper_class
 from .frames import LatestFrameQueue, SharedState, VideoFrame
 from .ndi_io import resize_rgb
+from .person_segmentation import PersonSegmenter, create_person_segmenter
 from .upscaler import Upscaler, create_upscaler
 
 
@@ -69,6 +71,9 @@ class StreamWorker:
         self._ignored_td: set[tuple[str, str, str]] = set()
         self.upscaler: Upscaler | None = None
         self._upscaler_loaded = False
+        self.segmenter: PersonSegmenter | None = None
+        self._segmenter_loaded = False
+        self._background_color = parse_background_color(config.background_color)
 
         self.state.mutate(self._sync_state)
 
@@ -268,10 +273,40 @@ class StreamWorker:
             if mode == self.active_preset.mode:
                 return
             self.active_preset = replace(self.active_preset, mode=mode)
+            if mode == "v2v":
+                self._configure_v2v_mode()
             self._needs_reload = mode != "passthrough"
             if mode == "passthrough":
                 self.wrapper = None
-            self.state.update(mode=mode)
+            self.state.mutate(self._sync_state)
+            return
+
+        if ctype == "set_segmentation":
+            enabled = bool(command.get("enabled", command.get("segmentation_enabled", False)))
+            person_only = bool(command.get("person_only", self.config.person_only))
+            cut_background = bool(command.get("cut_background", self.config.cut_background))
+            feather = float(command.get("feather", command.get("segmentation_feather", self.config.segmentation_feather)))
+            backend = str(command.get("backend", command.get("segmentation_backend", self.config.segmentation_backend)))
+            bg_color = command.get("background_color", self.config.background_color)
+            changed = (
+                enabled != self.config.segmentation_enabled
+                or person_only != self.config.person_only
+                or cut_background != self.config.cut_background
+                or feather != self.config.segmentation_feather
+                or backend != self.config.segmentation_backend
+                or str(bg_color) != str(self.config.background_color)
+            )
+            if not changed:
+                return
+            self.config.segmentation_enabled = enabled
+            self.config.person_only = person_only
+            self.config.cut_background = cut_background
+            self.config.segmentation_feather = feather
+            self.config.segmentation_backend = backend
+            self.config.background_color = str(bg_color)
+            self._background_color = parse_background_color(self.config.background_color)
+            self._reload_segmenter()
+            self.state.mutate(self._sync_state)
             return
 
         if ctype == "set_lora":
@@ -735,7 +770,16 @@ class StreamWorker:
                     mode=next_mode,
                     acceleration=next_accel,
                 )
-                reload_needed = True
+                if next_mode == "v2v":
+                    self._configure_v2v_mode()
+                    reload_needed = True
+
+        requested_mode = command.get("mode")
+        if requested_mode and str(requested_mode) != self.active_preset.mode:
+            self.active_preset = replace(self.active_preset, mode=str(requested_mode))
+            if str(requested_mode) == "v2v":
+                self._configure_v2v_mode()
+            reload_needed = True
 
         if command.get("frame_buffer_size") is not None:
             frame_buffer_size = max(1, int(command["frame_buffer_size"]))
@@ -802,6 +846,7 @@ class StreamWorker:
             self.wrapper = None
             self._needs_reload = False
             self._ensure_upscaler()
+            self._ensure_segmenter()
             self.state.update(loading=False, status="running")
             return
 
@@ -817,6 +862,8 @@ class StreamWorker:
             from streamdiffusion_td_bridge.vendor.tensorrt_export_patch import apply_tensorrt_patches
 
             apply_tensorrt_patches()
+        if self.active_preset.mode == "v2v":
+            self._configure_v2v_mode()
         frame_buffer_size = self.config.frame_buffer_size
         if not self._valid_frame_buffer_request(frame_buffer_size):
             frame_buffer_size = 1
@@ -889,6 +936,7 @@ class StreamWorker:
         self._prepare_current_prompt()
         self._apply_prompt_embeddings()
         self._ensure_upscaler()
+        self._ensure_segmenter()
         self._needs_reload = False
         self.state.update(loading=False, status="running")
 
@@ -969,6 +1017,48 @@ class StreamWorker:
             blended_pooled = torch.stack(pooled_embeds, dim=0).sum(dim=0) / total_weight
             _repeat_added(stream, blended_pooled.to(device=stream.device, dtype=stream.dtype))
 
+    def _configure_v2v_mode(self) -> None:
+        steps = len(self.active_preset.t_index_list)
+        target = max(1, steps)
+        if self._valid_frame_buffer_request(target):
+            if self.config.frame_buffer_size != target:
+                self.config.frame_buffer_size = target
+                self.active_preset = replace(self.active_preset, frame_buffer_size=target)
+        elif steps <= 1:
+            print(
+                "[stream_worker] v2v: add Step2-4 or use a quality preset for temporal batching "
+                f"(frame_buffer={self.config.frame_buffer_size}, t_index={self.active_preset.t_index_list})"
+            )
+        print(
+            f"[sdtd] v2v: frame_buffer={self.config.frame_buffer_size} "
+            f"t_index={self.active_preset.t_index_list}"
+        )
+
+    def _release_segmenter(self) -> None:
+        if self.segmenter is not None:
+            self.segmenter.close()
+        self.segmenter = None
+        self._segmenter_loaded = False
+
+    def _reload_segmenter(self) -> None:
+        self._release_segmenter()
+        if not self.config.segmentation_enabled:
+            return
+        if not self.config.person_only and not self.config.cut_background:
+            print("[segmentation] enabled but person_only and cut_background are off; segmenter idle")
+            return
+        self.segmenter = create_person_segmenter(
+            enabled=True,
+            feather=self.config.segmentation_feather,
+            backend=self.config.segmentation_backend,
+        )
+        self._segmenter_loaded = True
+
+    def _ensure_segmenter(self) -> None:
+        if self._segmenter_loaded:
+            return
+        self._reload_segmenter()
+
     def _release_upscaler(self) -> None:
         if self.upscaler is not None and hasattr(self.upscaler, "close"):
             self.upscaler.close()
@@ -995,12 +1085,28 @@ class StreamWorker:
         )
 
     def _process(self, frame: VideoFrame) -> np.ndarray:
+        source_rgb = np.ascontiguousarray(frame.data[:, :, :3])
         if self.active_preset.mode == "passthrough" or self.wrapper is None:
-            rgb = np.ascontiguousarray(frame.data[:, :, :3])
+            rgb = source_rgb
         else:
-            image = Image.fromarray(frame.data[:, :, :3], "RGB")
+            image = Image.fromarray(source_rgb, "RGB")
             result = self.wrapper(image=image, prompt=self.prompt)
             rgb = self._result_to_rgb(result)
+
+        if (
+            self.segmenter is not None
+            and self.config.segmentation_enabled
+            and (self.config.person_only or self.config.cut_background)
+        ):
+            mask = self.segmenter.segment_mask(source_rgb)
+            rgb = apply_segmentation_composite(
+                source_rgb,
+                rgb,
+                mask,
+                person_only=self.config.person_only,
+                cut_background=self.config.cut_background,
+                background_color=self._background_color,
+            )
 
         if self.upscaler is not None:
             rgb = self.upscaler.upscale_rgb(rgb)
@@ -1063,6 +1169,12 @@ class StreamWorker:
             out_w, out_h = self.config.output_resolution()
         extra["output_width"] = out_w
         extra["output_height"] = out_h
+        extra["segmentation_enabled"] = self.config.segmentation_enabled
+        extra["person_only"] = self.config.person_only
+        extra["cut_background"] = self.config.cut_background
+        extra["segmentation_feather"] = self.config.segmentation_feather
+        extra["background_color"] = self.config.background_color
+        extra["segmentation_runtime"] = self.segmenter.method if self.segmenter else "off"
         state.extra = extra
 
 

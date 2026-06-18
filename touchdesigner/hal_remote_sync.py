@@ -196,6 +196,14 @@ def build_params():
         if upscale_model:
             params["upscale_model"] = upscale_model
 
+    if hasattr(ctrl.par, "Segmentenabled"):
+        params["segmentation_enabled"] = bool(int(ctrl.par.Segmentenabled))
+        params["person_only"] = bool(int(ctrl.par.Persononly))
+        params["cut_background"] = bool(int(ctrl.par.Cutbackground))
+        params["segmentation_feather"] = float(ctrl.par.Segmentfeather)
+        params["background_color"] = ctrl.par.Backgroundcolor.eval()
+        params["segmentation_backend"] = ctrl.par.Segmentbackend.eval()
+
     ip_model = ctrl.par.Ipmodel.eval().strip() if hasattr(ctrl.par, "Ipmodel") else ""
     if ip_model and ip_path:
         params["ipadapter_model"] = ip_model
@@ -278,6 +286,10 @@ def onValueChange(par, prev):
         "controlnet",
         "promptinterp",
         "upscale",
+        "segment",
+        "persononly",
+        "cutbackground",
+        "backgroundcolor",
     )
     if any(token in par.name.lower() for token in tokens):
         push_params()

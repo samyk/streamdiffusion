@@ -30,6 +30,10 @@ from td_hal_defs import (
     ATTENTION_BACKEND_NAMES,
     PRESET_MENU_LABELS,
     PRESET_MENU_NAMES,
+    SEGMENTATION_BACKEND_LABELS,
+    SEGMENTATION_BACKEND_NAMES,
+    SEGMENTATION_BACKEND_LABELS,
+    SEGMENTATION_BACKEND_NAMES,
     UPSCALE_FACTOR_LABELS,
     UPSCALE_FACTOR_NAMES,
     UPSCALE_MAXINE_QUALITY_LABELS,
@@ -129,7 +133,7 @@ pg.appendStr("Modelid", label="Custom Model (HF id or .safetensors)")
 ctrl.par.Modelid = ""
 pg.appendMenu("Sdmode", label="Mode")
 ctrl.par.Sdmode.menuNames = ["img2img", "txt2img", "v2v", "passthrough"]
-ctrl.par.Sdmode.menuLabels = ["img2img", "txt2img", "v2v (TRT only)", "passthrough"]
+ctrl.par.Sdmode.menuLabels = ["img2img", "txt2img", "v2v (temporal img2img)", "passthrough"]
 ctrl.par.Sdmode = TD_HAL_DEFAULTS["Sdmode"]
 pg.appendMenu("Acceleration", label="Acceleration (SD Turbo / SDXL only)")
 ctrl.par.Acceleration.menuNames = ["none", "xformers", "tensorrt"]
@@ -205,6 +209,26 @@ ctrl.par.Upscalemaxinequality.menuLabels = UPSCALE_MAXINE_QUALITY_LABELS
 ctrl.par.Upscalemaxinequality = TD_HAL_DEFAULTS["Upscalemaxinequality"]
 pg.appendStr("Upscalemodel", label="Custom Upscale Model (.pth)")
 ctrl.par.Upscalemodel = ""
+
+# --- V2V + Person Segmentation ---
+_section("V2V / Segmentation")
+pg.appendToggle("Segmentenabled", label="Person Segmentation (CUDA / Maxine)")
+ctrl.par.Segmentenabled = TD_HAL_DEFAULTS["Segmentenabled"]
+_start_section("Segmentenabled")
+pg.appendToggle("Persononly", label="Person Only (style people, keep camera bg)")
+ctrl.par.Persononly = TD_HAL_DEFAULTS["Persononly"]
+pg.appendToggle("Cutbackground", label="Cut Background (replace bg color)")
+ctrl.par.Cutbackground = TD_HAL_DEFAULTS["Cutbackground"]
+feather = pg.appendFloat("Segmentfeather", label="Mask Feather (px)")
+feather.normMin = 0
+feather.normMax = 20
+ctrl.par.Segmentfeather = TD_HAL_DEFAULTS["Segmentfeather"]
+pg.appendStr("Backgroundcolor", label="Background Color (#RRGGBB or R,G,B)")
+ctrl.par.Backgroundcolor = TD_HAL_DEFAULTS["Backgroundcolor"]
+pg.appendMenu("Segmentbackend", label="Segmentation Backend")
+ctrl.par.Segmentbackend.menuNames = SEGMENTATION_BACKEND_NAMES
+ctrl.par.Segmentbackend.menuLabels = SEGMENTATION_BACKEND_LABELS
+ctrl.par.Segmentbackend = TD_HAL_DEFAULTS["Segmentbackend"]
 
 # --- Display ---
 _section("Display")

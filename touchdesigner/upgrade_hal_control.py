@@ -30,6 +30,8 @@ from hal_control_defs import (
     ATTENTION_BACKEND_NAMES,
     PRESET_MENU_LABELS,
     PRESET_MENU_NAMES,
+    SEGMENTATION_BACKEND_LABELS,
+    SEGMENTATION_BACKEND_NAMES,
     UPSCALE_FACTOR_LABELS,
     UPSCALE_FACTOR_NAMES,
     UPSCALE_MAXINE_QUALITY_LABELS,
@@ -130,6 +132,24 @@ _ensure_menu(
     TD_HAL_DEFAULTS["Upscalemaxinequality"],
 )
 _ensure_str(upscale, "Upscalemodel", "Custom Upscale Model (.pth)")
+
+# --- V2V / Person segmentation ---
+segment = _page("V2V / Segmentation")
+_ensure_toggle(segment, "Segmentenabled", "Person Segmentation (CUDA / Maxine)", TD_HAL_DEFAULTS["Segmentenabled"])
+_ensure_toggle(segment, "Persononly", "Person Only (style people, keep camera bg)", TD_HAL_DEFAULTS["Persononly"])
+_ensure_toggle(segment, "Cutbackground", "Cut Background (replace bg color)", TD_HAL_DEFAULTS["Cutbackground"])
+_ensure_float(segment, "Segmentfeather", "Mask Feather (px)", TD_HAL_DEFAULTS["Segmentfeather"])
+_ensure_str(segment, "Backgroundcolor", "Background Color (#RRGGBB or R,G,B)", TD_HAL_DEFAULTS["Backgroundcolor"])
+_ensure_menu(
+    segment,
+    "Segmentbackend",
+    "Segmentation Backend",
+    SEGMENTATION_BACKEND_NAMES,
+    SEGMENTATION_BACKEND_LABELS,
+    TD_HAL_DEFAULTS["Segmentbackend"],
+)
+if hasattr(ctrl.par, "Sdmode"):
+    ctrl.par.Sdmode.menuLabels = ["img2img", "txt2img", "v2v (temporal img2img)", "passthrough"]
 
 # --- Params that may be missing on older builds ---
 quality = _page("Quality")

@@ -36,4 +36,10 @@ HAL_BRIDGE_LAUNCH_DEFAULTS = {
     "sdmode": "img2img",
     "similar_image_filter_threshold": 0.0,
     "similar_image_filter_max_skip_frame": 10,
+    "segmentation_enabled": False,
+    "person_only": False,
+    "cut_background": False,
+    "segmentation_feather": 3.0,
+    "background_color": "#000000",
+    "segmentation_backend": "auto",
 }

@@ -330,4 +330,28 @@ def daydream_params_to_commands(
             }
         )
 
+    segmentation_changed = any(
+        _field_changed(params, previous, key)
+        for key in (
+            "segmentation_enabled",
+            "person_only",
+            "cut_background",
+            "segmentation_feather",
+            "background_color",
+            "segmentation_backend",
+        )
+    )
+    if segmentation_changed:
+        commands.append(
+            {
+                "type": "set_segmentation",
+                "enabled": bool(params.get("segmentation_enabled", False)),
+                "person_only": bool(params.get("person_only", False)),
+                "cut_background": bool(params.get("cut_background", False)),
+                "feather": float(params.get("segmentation_feather", 3.0)),
+                "background_color": str(params.get("background_color", "#000000")),
+                "backend": str(params.get("segmentation_backend", "auto")),
+            }
+        )
+
     return commands

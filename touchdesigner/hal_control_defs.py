@@ -47,6 +47,12 @@ UPSCALE_MAXINE_QUALITY_LABELS = [
     "High bitrate — Ultra",
 ]
 
+SEGMENTATION_BACKEND_NAMES = ["auto", "maxine", "cuda"]
+SEGMENTATION_BACKEND_LABELS = [
+    "Auto (Maxine AIGS → CUDA DeepLab)",
+    "Maxine AI Green Screen",
+    "CUDA DeepLab (Blackwell)",
+]
 ATTENTION_BACKEND_NAMES = ["auto", "flash", "sage", "xformers", "sdpa", "none"]
 ATTENTION_BACKEND_LABELS = [
     "Auto (flash → sage → xformers → sdpa)",
@@ -233,6 +239,12 @@ TD_HAL_DEFAULTS = {
     "Filterthreshold": _bridge_get("similar_image_filter_threshold", 0.0),
     "Filterskip": _bridge_get("similar_image_filter_max_skip_frame", 10),
     "Pausestream": False,
+    "Segmentenabled": _bridge_get("segmentation_enabled", False),
+    "Persononly": _bridge_get("person_only", False),
+    "Cutbackground": _bridge_get("cut_background", False),
+    "Segmentfeather": _bridge_get("segmentation_feather", 3.0),
+    "Backgroundcolor": _bridge_get("background_color", "#000000"),
+    "Segmentbackend": _bridge_get("segmentation_backend", "auto"),
 }
 
 
@@ -266,6 +278,7 @@ HAL_CONTROL_PARSCOPE = (
     "Upscalemaxinequality Upscalemodel "
     "Pipscale Textscale Textlift "
     "Filterthreshold Filterskip Pausestream "
+    "Segmentenabled Persononly Cutbackground Segmentfeather Backgroundcolor Segmentbackend "
     "Ipimagepath Ipscale Ipmodel Controlnetmodel Controlnetscale"
 )
 

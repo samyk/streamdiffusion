@@ -221,6 +221,12 @@ class BridgeConfig:
     upscale_half: bool = _defaults["upscale_half"]
     upscale_maxine_quality: str = _defaults["upscale_maxine_quality"]
     upscale_model: str | None = None
+    segmentation_enabled: bool = _defaults["segmentation_enabled"]
+    person_only: bool = _defaults["person_only"]
+    cut_background: bool = _defaults["cut_background"]
+    segmentation_feather: float = _defaults["segmentation_feather"]
+    background_color: str = _defaults["background_color"]
+    segmentation_backend: str = _defaults["segmentation_backend"]
 
     def effective_frame_buffer_size(self) -> int:
         if self.frame_buffer_size is not None:
@@ -239,6 +245,18 @@ class BridgeConfig:
         if self.upscale_enabled:
             return self.width * self.upscale_factor, self.height * self.upscale_factor
         return self.width, self.height
+
+    def _segmentation_label(self) -> str:
+        if not self.segmentation_enabled:
+            return "off"
+        flags = []
+        if self.person_only:
+            flags.append("person-only")
+        if self.cut_background:
+            flags.append("cut-bg")
+        if not flags:
+            flags.append("mask only")
+        return f"on ({', '.join(flags)}, feather {self.segmentation_feather})"
 
     def print_startup_settings(self) -> None:
         preset_entry = PRESETS.get(self.preset)
@@ -285,6 +303,7 @@ class BridgeConfig:
             f"  attention backend:   {attention}",
             f"  modelopt:            {modelopt}",
             f"  upscale:             {upscale}",
+            f"  segmentation:      {self._segmentation_label()}",
             f"  video backend:       {self.video_backend}",
             f"  NDI in:              {self.input_name}",
             f"  NDI out:             {self.output_name}",
