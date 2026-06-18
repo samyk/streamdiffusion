@@ -8,16 +8,16 @@ python3 -m venv .venv
 source .venv/bin/activate
 # shellcheck source=common.sh
 source "${ROOT}/scripts/common.sh"
+# shellcheck source=pytorch_cu132_env.sh
+source "${ROOT}/scripts/pytorch_cu132_env.sh"
 
 "${PYTHON}" -m pip install --upgrade pip "setuptools<82" wheel
-source "${ROOT}/scripts/install_pytorch_cu128.sh"
-"${PYTHON}" -m pip install diffusers==0.24.0 transformers accelerate fire omegaconf
+sdtd_install_cu132_torch
+sdtd_pin_inference_stack
 source "${ROOT}/scripts/install_streamdiffusion_deps.sh"
 "${PYTHON}" -m pip install -e ".[ndi]"
-# Re-assert matched cu128 wheels if other packages pulled a different torch build.
-source "${ROOT}/scripts/install_pytorch_cu128.sh"
+sdtd_reassert_cu132_torch
 # shellcheck source=env_cuda.sh
 source "${ROOT}/scripts/env_cuda.sh"
 "${PYTHON}" -m streamdiffusion_td_bridge.verify_gpu
 "${PYTHON}" -m streamdiffusion_td_bridge.verify_inference
-

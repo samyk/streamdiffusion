@@ -8,7 +8,7 @@ source .venv/bin/activate
 echo "Installing FLUX.2 Klein stack (diffusers main + updated transformers)..."
 pip install "git+https://github.com/huggingface/diffusers.git"
 pip install "transformers>=4.51" "accelerate>=1.4" "safetensors" "sentencepiece" "protobuf"
-pip install "huggingface-hub>=0.26,<1.0"
+pip install "huggingface-hub>=1.0"
 
 echo "Verifying Flux2KleinPipeline import..."
 python - <<'PY'

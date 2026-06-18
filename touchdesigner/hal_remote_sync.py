@@ -57,7 +57,14 @@ def _steps(ctrl):
     step2 = int(ctrl.par.Step2)
     step3 = int(ctrl.par.Step3)
     step4 = int(ctrl.par.Step4)
-    flux_presets = {"flux2_klein_fast", "flux2_klein_quality", "flux2_klein_9b"}
+    transformer_presets = {
+        "flux2_klein_fast",
+        "flux2_klein_quality",
+        "flux2_klein_9b",
+        "sd35_medium_fast",
+        "sd35_medium_quality",
+        "sd35_large_fast",
+    }
     preset_steps = {
         "sdxl_turbo_fast": [35],
         "sdxl_turbo_quality": [32, 45],
@@ -67,8 +74,11 @@ def _steps(ctrl):
         "flux2_klein_fast": [1, 2, 3, 4],
         "flux2_klein_quality": [1, 2, 3, 4, 5, 6],
         "flux2_klein_9b": [1, 2, 3, 4],
+        "sd35_medium_fast": [1, 2, 3, 4],
+        "sd35_medium_quality": [1, 2, 3, 4, 5, 6],
+        "sd35_large_fast": [1, 2, 3, 4],
     }
-    if preset in flux_presets:
+    if preset in transformer_presets or preset.startswith("sd3_"):
         return _klein_steps(denoise, step2, step3, step4)
     steps = _turbo_steps(denoise, step2, step3, step4)
     if not steps:
@@ -119,6 +129,9 @@ def build_params():
         "delta": float(ctrl.par.Delta),
         "seed": int(ctrl.par.Seed),
         "acceleration": ctrl.par.Acceleration.eval(),
+        "attention_backend": ctrl.par.Attentionbackend.eval()
+        if hasattr(ctrl.par, "Attentionbackend")
+        else "auto",
         "mode": ctrl.par.Sdmode.eval(),
         "sdmode": ctrl.par.Sdmode.eval(),
         "width": int(ctrl.par.Width),
@@ -129,6 +142,9 @@ def build_params():
         "flux_transformer_engine": bool(int(ctrl.par.Fluxtransformerengine))
         if hasattr(ctrl.par, "Fluxtransformerengine")
         else True,
+        "modelopt_enabled": bool(int(ctrl.par.Modeloptenabled))
+        if hasattr(ctrl.par, "Modeloptenabled")
+        else False,
         "use_tiny_vae": bool(int(ctrl.par.Usetinyvae))
         if hasattr(ctrl.par, "Usetinyvae")
         else True,
@@ -165,6 +181,10 @@ def build_params():
         params["controlnet_scale"] = (
             float(ctrl.par.Controlnetscale) if hasattr(ctrl.par, "Controlnetscale") else 0.5
         )
+
+    modelopt_checkpoint = ctrl.par.Modeloptcheckpoint.eval().strip() if hasattr(ctrl.par, "Modeloptcheckpoint") else ""
+    if modelopt_checkpoint:
+        params["modelopt_checkpoint"] = modelopt_checkpoint
 
     if hasattr(ctrl.par, "Upscaleenabled"):
         params["upscale_enabled"] = bool(int(ctrl.par.Upscaleenabled))
@@ -240,11 +260,13 @@ def onValueChange(par, prev):
         "preset",
         "modelid",
         "acceleration",
+        "attentionbackend",
         "sdmode",
         "width",
         "height",
         "framebatch",
         "fluxtransformer",
+        "modelopt",
         "filter",
         "pause",
         "lora",

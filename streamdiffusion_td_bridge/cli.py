@@ -90,6 +90,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="StreamDiffusion frame_buffer_size / stream batch depth (default: preset value).",
     )
     parser.add_argument(
+        "--attention-backend",
+        choices=["auto", "flash", "sage", "xformers", "sdpa", "none"],
+        default=D["attention_backend"],
+        help="Attention kernel for DiT/UNet eager paths (auto picks best on Blackwell).",
+    )
+    parser.add_argument(
+        "--modelopt",
+        action=argparse.BooleanOptionalAction,
+        default=D["modelopt_enabled"],
+        help="Load NVIDIA ModelOpt quantized transformer checkpoint when provided.",
+    )
+    parser.add_argument(
+        "--modelopt-checkpoint",
+        default=D.get("modelopt_checkpoint"),
+        help="Optional path to a ModelOpt-quantized transformer checkpoint.",
+    )
+    parser.add_argument(
         "--flux-transformer-engine",
         action=argparse.BooleanOptionalAction,
         default=D["flux_transformer_engine"],
@@ -118,6 +135,9 @@ def main() -> None:
         seed=args.seed,
         engine_dir=args.engine_dir,
         acceleration=args.acceleration,
+        attention_backend=args.attention_backend,
+        modelopt_enabled=args.modelopt,
+        modelopt_checkpoint=args.modelopt_checkpoint,
         video_backend=args.video_backend,
         upscale_enabled=args.upscale,
         upscale_factor=args.upscale_factor,

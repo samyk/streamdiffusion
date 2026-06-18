@@ -8,6 +8,8 @@ MODEL_PRESETS: dict[str, str] = {
     "runwayml/stable-diffusion-v1-5": "lcm_lora_style",
     "black-forest-labs/FLUX.2-klein-4B": "flux2_klein_fast",
     "black-forest-labs/FLUX.2-klein-9B": "flux2_klein_9b",
+    "stabilityai/stable-diffusion-3.5-medium": "sd35_medium_fast",
+    "stabilityai/stable-diffusion-3.5-large": "sd35_large_fast",
 }
 
 PRESET_NAMES = set(
@@ -21,6 +23,9 @@ PRESET_NAMES = set(
         "flux2_klein_fast",
         "flux2_klein_quality",
         "flux2_klein_9b",
+        "sd35_medium_fast",
+        "sd35_medium_quality",
+        "sd35_large_fast",
     ]
 )
 
@@ -42,6 +47,9 @@ def _model_fields_changed(params: dict[str, Any], previous: dict[str, Any] | Non
         "sdmode",
         "frame_buffer_size",
         "flux_transformer_engine",
+        "attention_backend",
+        "modelopt_enabled",
+        "modelopt_checkpoint",
     )
     if not previous:
         return any(key in params for key in keys)
@@ -89,6 +97,15 @@ def _resolve_preset(params: dict[str, Any]) -> str | None:
     return None
 
 
+def _acceleration_only_changed(params: dict[str, Any], previous: dict[str, Any] | None) -> bool:
+    if not _field_changed(params, previous, "acceleration"):
+        return False
+    for key in ("model_id", "preset", "mode", "sdmode", "frame_buffer_size", "flux_transformer_engine"):
+        if key in params and (not previous or params.get(key) != previous.get(key)):
+            return False
+    return True
+
+
 def daydream_params_to_commands(
     params: dict[str, Any],
     *,
@@ -113,13 +130,23 @@ def daydream_params_to_commands(
             }
         )
 
-    if _model_fields_changed(params, previous):
+    if _acceleration_only_changed(params, previous):
+        commands.append({"type": "set_acceleration", "acceleration": str(params["acceleration"])})
+    elif _field_changed(params, previous, "attention_backend"):
+        commands.append(
+            {
+                "type": "set_attention_backend",
+                "attention_backend": str(params["attention_backend"]),
+            }
+        )
+    elif _model_fields_changed(params, previous):
         preset = _resolve_preset(params)
         model_id = str(params.get("model_id", "")).strip()
         load_command: dict[str, Any] = {
             "type": "load_model",
             "mode": str(params.get("mode", params.get("sdmode", "img2img"))),
-            "acceleration": str(params.get("acceleration", "none")),
+            "acceleration": str(params.get("acceleration", "tensorrt")),
+            "attention_backend": str(params.get("attention_backend", "auto")),
         }
         if preset:
             load_command["preset"] = preset
@@ -135,6 +162,10 @@ def daydream_params_to_commands(
             load_command["frame_buffer_size"] = max(1, int(params["frame_buffer_size"]))
         if params.get("flux_transformer_engine") is not None:
             load_command["flux_transformer_engine"] = bool(params["flux_transformer_engine"])
+        if params.get("modelopt_enabled") is not None:
+            load_command["modelopt_enabled"] = bool(params["modelopt_enabled"])
+        if params.get("modelopt_checkpoint"):
+            load_command["modelopt_checkpoint"] = str(params["modelopt_checkpoint"])
         commands.append(load_command)
 
     if _field_changed(params, previous, "frame_buffer_size") and not _model_fields_changed(params, previous):
@@ -194,12 +225,14 @@ def daydream_params_to_commands(
         )
 
     if _field_changed(params, previous, "t_index_list") and params.get("t_index_list"):
-        commands.append(
-            {
-                "type": "set_denoise",
-                "steps": [int(v) for v in params["t_index_list"]],
-            }
-        )
+        denoise_cmd: dict[str, Any] = {
+            "type": "set_denoise",
+            "steps": [int(v) for v in params["t_index_list"]],
+        }
+        preset = _resolve_preset(params)
+        if preset:
+            denoise_cmd["preset"] = preset
+        commands.append(denoise_cmd)
 
     if _field_changed(params, previous, "guidance_scale"):
         preset = _resolve_preset(params) or str(

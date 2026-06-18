@@ -10,12 +10,13 @@ STREAM_ID = "remote-1"
 NDI_IN = "td_streamdiffusion_in"
 NDI_OUT = "streamdiffusion_out"
 
-# Captured 2026-06-17: sd_turbo_fast @ 960x540, tiny VAE, 1-step denoise, 2x Maxine.
+# Captured 2026-06-17: sd_turbo_fast @ 960x540, TensorRT, tiny VAE, 2x Maxine.
 HAL_BRIDGE_LAUNCH_DEFAULTS = {
     "preset": "sd_turbo_fast",
     "width": 960,
-    "height": 540,
-    "acceleration": "none",
+    "height": 536,
+    "acceleration": "tensorrt",
+    "attention_backend": "auto",
     "prompt": "paper comic halftone hero, Ben-Day dots, speech bubble pop-art",
     "negative_prompt": "blurry, low detail, artifacts, watermark",
     "guidance_scale": 1.1,
@@ -23,6 +24,8 @@ HAL_BRIDGE_LAUNCH_DEFAULTS = {
     "seed": 2,
     "frame_buffer_size": 1,
     "flux_transformer_engine": True,
+    "modelopt_enabled": False,
+    "modelopt_checkpoint": None,
     "use_tiny_vae": True,
     "upscale_enabled": True,
     "upscale_factor": 2,

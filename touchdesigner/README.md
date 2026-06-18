@@ -37,7 +37,7 @@ The bridge COMP is **control-only** (WebSocket). NDI lives at `/project1` level 
 
 1. Wire your source TOP into `webcam_in` (or replace webcam)
 2. Set `Bridgehost` to your Linux box IP/hostname
-3. Start bridge on hal: `sdtd-bridge --acceleration none --preset sd_turbo_fast`
+3. Start bridge on hal: `sdtd-bridge --acceleration tensorrt --preset sd_turbo_fast`
 4. Pulse **Push All** on first connect
 
 ## Manual patch
@@ -59,7 +59,7 @@ cb.send_prompt("liquid chrome orchid")
 cb.send_denoise([35, 20, 10])
 cb.send_guidance(1.1)
 cb.send_seed(42)
-cb.load_preset("sd_turbo_fast", mode="img2img", acceleration="none")
+cb.load_preset("sd_turbo_fast", mode="img2img", acceleration="tensorrt")
 cb.push_all()
 ```
 

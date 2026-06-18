@@ -11,8 +11,20 @@ import torch
 from PIL import Image
 
 from .accel import resolve_acceleration
-from .config import PRESETS, BridgeConfig, ModelPreset, RuntimeState, is_flux_preset
-from .control import normalize_resolution, parse_prompt_entries, parse_t_index_list
+from .accel_log import log_acceleration, normalize_accel_label
+from .config import (
+    PRESETS,
+    BridgeConfig,
+    ModelPreset,
+    RuntimeState,
+    is_flux_preset,
+    is_transformer_preset,
+)
+from .control import (
+    normalize_resolution_for_preset,
+    parse_prompt_entries,
+    parse_t_index_list,
+)
 from .deps import load_wrapper_class
 from .frames import LatestFrameQueue, SharedState, VideoFrame
 from .ndi_io import resize_rgb
@@ -35,6 +47,7 @@ class StreamWorker:
         self.state = state
         self.active_preset = PRESETS[config.preset]
         self.config.frame_buffer_size = config.frame_buffer_size or self.active_preset.frame_buffer_size
+        self._apply_infer_resolution(self.config.width, self.config.height)
         self.wrapper = None
         self.prompt = config.prompt
         self.prompt_entries: list[dict[str, Any]] = (
@@ -55,7 +68,7 @@ class StreamWorker:
         self._t_index_debounce_s = 0.2
         self._ignored_td: set[tuple[str, str, str]] = set()
         self.upscaler: Upscaler | None = None
-        self._reload_upscaler()
+        self._upscaler_loaded = False
 
         self.state.mutate(self._sync_state)
 
@@ -72,9 +85,20 @@ class StreamWorker:
                 if signature == self._last_loaded_signature and self.wrapper is not None:
                     self._needs_reload = False
                 else:
-                    self._load_model()
-                    if self.wrapper is not None or self.active_preset.mode == "passthrough":
-                        self._last_loaded_signature = signature
+                    try:
+                        self._load_model()
+                    except Exception as exc:  # keep worker alive; surface error to TD/API
+                        self.state.update(
+                            loading=False,
+                            status="error",
+                            last_error=f"{type(exc).__name__}: {exc}",
+                        )
+                        traceback.print_exc()
+                        self._needs_reload = False
+                        time.sleep(1.0)
+                    else:
+                        if self.wrapper is not None or self.active_preset.mode == "passthrough":
+                            self._last_loaded_signature = signature
 
             frame = self.input_queue.get(timeout=0.05)
             if frame is None:
@@ -113,6 +137,32 @@ class StreamWorker:
                 return
             self._apply_command(command)
 
+    def _apply_infer_resolution(
+        self,
+        width: int,
+        height: int,
+        *,
+        preset: ModelPreset | None = None,
+    ) -> tuple[int, int]:
+        preset = preset or self.active_preset
+        requested = (int(width), int(height))
+        snapped = normalize_resolution_for_preset(
+            width,
+            height,
+            pipeline=preset.pipeline,
+            name=preset.name,
+        )
+        if snapped != requested:
+            align = 16 if is_transformer_preset(pipeline=preset.pipeline, name=preset.name) else 8
+            print(
+                f"[stream_worker] infer resolution snapped "
+                f"{requested[0]}x{requested[1]} -> {snapped[0]}x{snapped[1]} "
+                f"(align {align})"
+            )
+        self.config.width, self.config.height = snapped
+        self.state.update(width=snapped[0], height=snapped[1])
+        return snapped
+
     def _apply_command(self, command: dict[str, Any]) -> None:
         ctype = command.get("type")
         if ctype == "set_prompt":
@@ -138,7 +188,24 @@ class StreamWorker:
 
         if ctype in ("set_denoise", "set_t_index_list"):
             try:
-                self._update_t_index_list(parse_t_index_list(command))
+                t_index_list = parse_t_index_list(command)
+                requested_preset = command.get("preset")
+                if (
+                    isinstance(requested_preset, str)
+                    and requested_preset in PRESETS
+                    and requested_preset != self.active_preset.name
+                ):
+                    self.config.preset = requested_preset
+                    self._apply_load_model(
+                        {
+                            "preset": requested_preset,
+                            "t_index_list": t_index_list,
+                            "attention_backend": self.config.attention_backend,
+                            "flux_transformer_engine": self.config.flux_transformer_engine,
+                        }
+                    )
+                    return
+                self._update_t_index_list(t_index_list)
             except ValueError as exc:
                 self._ignore_td("denoise", command, str(exc))
             return
@@ -249,27 +316,25 @@ class StreamWorker:
             return
 
         if ctype in ("set_ipadapter", "set_controlnet"):
-            extra = dict(self.state.snapshot().get("extra", {}))
-            extra[ctype] = command
-            extra[f"{ctype}_status"] = (
-                "queued (requires TensorRT; unavailable on Blackwell acceleration=none)"
-            )
-            self.state.update(extra=extra)
-            print(
-                f"[stream_worker] {ctype} requested but advanced processors need TensorRT. "
-                "Ignored on Blackwell until TRT supports sm_120."
-            )
-            return
+            accel = resolve_acceleration(self.config.acceleration, self.active_preset.acceleration)
+            if accel != "tensorrt":
+                extra = dict(self.state.snapshot().get("extra", {}))
+                extra[ctype] = command
+                extra[f"{ctype}_status"] = "ignored (requires acceleration=tensorrt)"
+                self.state.update(extra=extra)
+                print(
+                    f"[stream_worker] {ctype} requested but needs TensorRT "
+                    f"(current acceleration={accel!r})."
+                )
+                return
 
         if ctype == "set_resolution":
-            width, height = normalize_resolution(
-                int(command.get("width", self.config.width)),
-                int(command.get("height", self.config.height)),
-            )
-            if width == self.config.width and height == self.config.height:
+            prev = (self.config.width, self.config.height)
+            width = int(command.get("width", self.config.width))
+            height = int(command.get("height", self.config.height))
+            snapped = self._apply_infer_resolution(width, height)
+            if snapped == prev and self.wrapper is not None:
                 return
-            self.config.width = width
-            self.config.height = height
             self.wrapper = None
             self._needs_reload = self.active_preset.mode != "passthrough"
             self.state.mutate(self._sync_state)
@@ -301,7 +366,14 @@ class StreamWorker:
             self.config.upscale_maxine_quality = maxine_quality
             if model_path is not None:
                 self.config.upscale_model = str(model_path) if model_path else None
-            self._reload_upscaler()
+            model_ready = self.wrapper is not None or self.active_preset.mode == "passthrough"
+            if model_ready:
+                self._reload_upscaler()
+                self._upscaler_loaded = True
+            else:
+                # Maxine + TensorRT init order is fragile; defer until after model load.
+                self._release_upscaler()
+                self._upscaler_loaded = False
             self.state.mutate(self._sync_state)
             return
 
@@ -336,7 +408,32 @@ class StreamWorker:
             self.state.mutate(self._sync_state)
             return
 
+        if ctype == "set_attention_backend":
+            backend = str(command.get("attention_backend", command.get("value", "auto"))).strip().lower()
+            if backend == str(self.config.attention_backend):
+                return
+            self.config.attention_backend = backend
+            self.wrapper = None
+            self._needs_reload = self.active_preset.mode != "passthrough"
+            self.state.mutate(self._sync_state)
+            return
+
+        if ctype == "set_acceleration":
+            accel = str(command.get("acceleration", command.get("value", ""))).strip().lower()
+            if accel not in ("none", "xformers", "tensorrt"):
+                self._ignore_td("acceleration", accel, "expected none, xformers, or tensorrt")
+                return
+            self._apply_acceleration_from_td(accel)  # type: ignore[arg-type]
+            return
+
         if ctype == "load_model":
+            td_preset = command.get("preset")
+            if isinstance(td_preset, str) and td_preset in PRESETS and td_preset != self.config.preset:
+                print(f"[stream_worker] preset change: {self.config.preset!r} -> {td_preset!r}")
+                self.config.preset = td_preset
+            elif isinstance(td_preset, str) and td_preset not in PRESETS:
+                self._ignore_td("load_model", td_preset, f"unknown preset (known: {sorted(PRESETS)})")
+                return
             if not self._apply_load_model(command):
                 return
             return
@@ -348,7 +445,8 @@ class StreamWorker:
 
     def _update_t_index_list(self, t_index_list: list[int]) -> None:
         if not self._valid_t_index_list(t_index_list):
-            self._ignore_td("t_index_list", t_index_list, "invalid t_index_list for active preset")
+            reason = self._t_index_invalid_reason(t_index_list)
+            self._ignore_td("t_index_list", t_index_list, reason)
             return
         if t_index_list == list(self.active_preset.t_index_list):
             return
@@ -356,7 +454,7 @@ class StreamWorker:
         self.state.update(t_index_list=t_index_list)
         if self.wrapper is None:
             return
-        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+        if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
             self.wrapper.set_t_index_list(t_index_list)
             return
         self._pending_t_index = list(t_index_list)
@@ -374,6 +472,11 @@ class StreamWorker:
             self.config.frame_buffer_size,
         ):
             self.state.mutate(self._sync_state)
+        else:
+            self.wrapper = None
+            self._needs_reload = True
+            self._last_loaded_signature = None
+            self.state.mutate(self._sync_state)
 
     def _reconfigure_streamdiffusion_batch(
         self,
@@ -382,13 +485,24 @@ class StreamWorker:
     ) -> bool:
         if self.wrapper is None:
             return False
-        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+        if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
             return False
         if not hasattr(self.wrapper, "reconfigure_batch"):
             return False
+        requested = max(1, int(frame_buffer_size))
+        if hasattr(self.wrapper, "trt_batch_matches") and not self.wrapper.trt_batch_matches(
+            t_index_list,
+            requested,
+        ):
+            needed = self.wrapper.trt_unet_batch_size_for(t_index_list, requested)
+            current = int(self.wrapper.stream.trt_unet_batch_size)
+            print(
+                f"[stream_worker] TensorRT UNet batch {current} -> {needed}; "
+                "reloading to rebuild engines"
+            )
+            return False
         if not self._valid_t_index_list(t_index_list):
             return False
-        requested = max(1, int(frame_buffer_size))
         if not self._valid_frame_buffer_request(requested, t_index_list=t_index_list):
             return False
         self.config.frame_buffer_size = requested
@@ -411,19 +525,45 @@ class StreamWorker:
         self._ignored_td.add(token)
         print(f"[stream_worker] ignoring TD {key}={value!r}: {reason}")
 
-    def _valid_t_index_list(self, t_index_list: list[int]) -> bool:
+    def _valid_t_index_list(
+        self,
+        t_index_list: list[int],
+        *,
+        preset: ModelPreset | None = None,
+    ) -> bool:
+        preset = preset or self.active_preset
         if not t_index_list:
             return False
-        flux = is_flux_preset(
-            pipeline=self.active_preset.pipeline,
-            name=self.active_preset.name,
-        )
-        max_len = 6 if flux else 4
+        transformer = is_transformer_preset(pipeline=preset.pipeline, name=preset.name)
+        max_len = 6 if transformer else 4
         if len(t_index_list) > max_len:
             return False
-        if flux:
+        if transformer:
             return all(1 <= int(v) <= 6 for v in t_index_list)
+        if preset.name == "lcm_lora_style":
+            return all(0 <= int(v) <= 49 for v in t_index_list)
         return all(1 <= int(v) <= 49 for v in t_index_list)
+
+    def _t_index_invalid_reason(
+        self,
+        t_index_list: list[int],
+        *,
+        preset: ModelPreset | None = None,
+    ) -> str:
+        preset = preset or self.active_preset
+        transformer = is_transformer_preset(pipeline=preset.pipeline, name=preset.name)
+        if (
+            not transformer
+            and len(t_index_list) <= 6
+            and all(1 <= int(v) <= 6 for v in t_index_list)
+        ):
+            return (
+                f"transformer step counts for preset {preset.name!r}; "
+                f"select an SD3.5/FLUX preset in TD to reload the model"
+            )
+        if transformer:
+            return f"invalid t_index_list for {preset.name!r} (use 1-6 steps, max 6 values)"
+        return f"invalid t_index_list for {preset.name!r} (turbo: t_index 15-49, max 4 steps)"
 
     def _valid_frame_buffer_request(
         self,
@@ -434,7 +574,7 @@ class StreamWorker:
         requested = max(1, int(requested))
         if requested > 8:
             return False
-        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+        if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
             return True
         steps = t_index_list if t_index_list is not None else list(self.active_preset.t_index_list)
         if len(steps) <= 1 and requested > 1:
@@ -444,23 +584,78 @@ class StreamWorker:
     def _t_index_plausible_for_preset(self, preset: ModelPreset, t_index_list: list[int]) -> bool:
         if not t_index_list:
             return False
-        if is_flux_preset(pipeline=preset.pipeline, name=preset.name):
+        if is_transformer_preset(pipeline=preset.pipeline, name=preset.name):
             return 1 <= len(t_index_list) <= 6
         return min(int(v) for v in t_index_list) >= 15
+
+    def _apply_acceleration_from_td(self, accel: str) -> None:
+        from .accel import resolve_acceleration
+
+        preset_default = self.active_preset.acceleration
+        resolved = resolve_acceleration(accel, preset_default)  # type: ignore[arg-type]
+        current = resolve_acceleration(self.config.acceleration, self.active_preset.acceleration)
+        if resolved == current and self.wrapper is not None:
+            return
+        if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+            if accel not in ("none", preset_default):
+                self._ignore_td(
+                    "acceleration",
+                    accel,
+                    f"transformer presets use {preset_default!r} + attention backend, not {accel!r}",
+                )
+            return
+        print(f"[stream_worker] acceleration change: {current!r} -> {resolved!r}")
+        self.config.acceleration = resolved
+        self.active_preset = replace(self.active_preset, acceleration=resolved)
+        self.wrapper = None
+        self._needs_reload = self.active_preset.mode != "passthrough"
+        self.state.mutate(self._sync_state)
+        log_acceleration(resolved, requested=resolved)
 
     def _apply_load_model(self, command: dict[str, Any]) -> bool:
         """Apply load_model only when something valid actually requires a reload."""
         reload_needed = False
+        preset_name = command.get("preset")
 
-        if command.get("width") is not None and command.get("height") is not None:
-            width, height = normalize_resolution(int(command["width"]), int(command["height"]))
-            if width != self.config.width or height != self.config.height:
-                self.config.width = width
-                self.config.height = height
-                self.state.update(width=width, height=height)
+        if command.get("acceleration") is not None:
+            next_accel = str(command["acceleration"])
+            resolved = resolve_acceleration(next_accel, self.active_preset.acceleration)
+            current = resolve_acceleration(self.config.acceleration, self.active_preset.acceleration)
+            if resolved != current:
+                print(f"[stream_worker] acceleration change: {current!r} -> {resolved!r}")
+                self.config.acceleration = resolved
+                self.active_preset = replace(self.active_preset, acceleration=resolved)
                 reload_needed = True
 
-        preset_name = command.get("preset")
+        if command.get("attention_backend") is not None:
+            backend = str(command["attention_backend"])
+            if backend != str(self.config.attention_backend):
+                self.config.attention_backend = backend
+                reload_needed = True
+
+        if command.get("modelopt_enabled") is not None:
+            enabled = bool(command["modelopt_enabled"])
+            if enabled != self.config.modelopt_enabled:
+                self.config.modelopt_enabled = enabled
+                reload_needed = True
+
+        if "modelopt_checkpoint" in command:
+            checkpoint = str(command.get("modelopt_checkpoint") or "").strip() or None
+            if checkpoint != self.config.modelopt_checkpoint:
+                self.config.modelopt_checkpoint = checkpoint
+                reload_needed = True
+
+        if command.get("width") is not None and command.get("height") is not None:
+            prev = (self.config.width, self.config.height)
+            align_preset = PRESETS[preset_name] if preset_name and preset_name in PRESETS else self.active_preset
+            snapped = self._apply_infer_resolution(
+                int(command["width"]),
+                int(command["height"]),
+                preset=align_preset,
+            )
+            if snapped != prev:
+                reload_needed = True
+
         if preset_name:
             if preset_name not in PRESETS:
                 self._ignore_td("preset", preset_name, f"unknown preset (known: {sorted(PRESETS)})")
@@ -468,12 +663,18 @@ class StreamWorker:
                 previous_t_index = list(self.active_preset.t_index_list)
                 next_preset = PRESETS[preset_name]
                 t_index_list = command.get("t_index_list") or previous_t_index
-                if command.get("t_index_list") and not self._valid_t_index_list(
-                    [int(v) for v in t_index_list]
-                ):
-                    self._ignore_td("t_index_list", t_index_list, "invalid t_index_list for active preset")
-                    t_index_list = previous_t_index
                 proposed = [int(v) for v in t_index_list]
+                if command.get("t_index_list") and not self._valid_t_index_list(
+                    proposed,
+                    preset=next_preset,
+                ):
+                    self._ignore_td(
+                        "t_index_list",
+                        t_index_list,
+                        self._t_index_invalid_reason(proposed, preset=next_preset),
+                    )
+                    t_index_list = previous_t_index
+                    proposed = [int(v) for v in t_index_list]
                 if preset_name != self.active_preset.name and not self._t_index_plausible_for_preset(
                     next_preset, proposed
                 ):
@@ -483,9 +684,15 @@ class StreamWorker:
                         f"from {proposed} to {list(t_index_list)}"
                     )
                 if preset_name != self.active_preset.name or next_preset.model_id_or_path != self.active_preset.model_id_or_path:
+                    self.config.preset = preset_name
                     self.active_preset = replace(
                         next_preset,
                         t_index_list=[int(v) for v in t_index_list],
+                    )
+                    self._apply_infer_resolution(
+                        self.config.width,
+                        self.config.height,
+                        preset=self.active_preset,
                     )
                     reload_needed = True
                 elif list(t_index_list) != list(self.active_preset.t_index_list):
@@ -522,7 +729,7 @@ class StreamWorker:
         else:
             next_mode = command.get("mode", self.active_preset.mode)
             next_accel = command.get("acceleration", self.active_preset.acceleration)
-            if next_mode != self.active_preset.mode or next_accel != self.active_preset.acceleration:
+            if next_mode != self.active_preset.mode:
                 self.active_preset = replace(
                     self.active_preset,
                     mode=next_mode,
@@ -553,7 +760,7 @@ class StreamWorker:
             enabled = bool(command["flux_transformer_engine"])
             if enabled != self.config.flux_transformer_engine:
                 self.config.flux_transformer_engine = enabled
-                if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+                if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
                     reload_needed = True
 
         if not reload_needed:
@@ -576,13 +783,17 @@ class StreamWorker:
         return (
             self.active_preset.name,
             self.active_preset.model_id_or_path,
+            tuple(self.active_preset.t_index_list),
             self._effective_frame_buffer_size(),
             self.config.width,
             self.config.height,
             self.use_tiny_vae,
             self.vae_id,
             acceleration,
+            self.config.attention_backend,
             self.config.flux_transformer_engine,
+            self.config.modelopt_enabled,
+            self.config.modelopt_checkpoint,
             self.active_preset.mode,
         )
 
@@ -590,12 +801,22 @@ class StreamWorker:
         if self.active_preset.mode == "passthrough":
             self.wrapper = None
             self._needs_reload = False
+            self._ensure_upscaler()
             self.state.update(loading=False, status="running")
             return
+
+        self._release_upscaler()
 
         self.state.update(loading=True, status="loading", last_error=None)
         wrapper_cls = load_wrapper_class(self.active_preset)
         acceleration = resolve_acceleration(self.config.acceleration, self.active_preset.acceleration)
+        if not is_flux_preset(
+            pipeline=self.active_preset.pipeline,
+            name=self.active_preset.name,
+        ) and acceleration == "tensorrt":
+            from streamdiffusion_td_bridge.vendor.tensorrt_export_patch import apply_tensorrt_patches
+
+            apply_tensorrt_patches()
         frame_buffer_size = self.config.frame_buffer_size
         if not self._valid_frame_buffer_request(frame_buffer_size):
             frame_buffer_size = 1
@@ -606,6 +827,8 @@ class StreamWorker:
         extra["frame_buffer_size"] = self.config.frame_buffer_size
         extra["flux_transformer_engine"] = self.config.flux_transformer_engine
         self.state.update(extra=extra)
+        self._apply_infer_resolution(self.config.width, self.config.height)
+        infer_w, infer_h = self.config.width, self.config.height
         wrapper_kwargs = dict(
             model_id_or_path=self.active_preset.model_id_or_path,
             t_index_list=self.active_preset.t_index_list,
@@ -613,10 +836,11 @@ class StreamWorker:
             mode="img2img" if self.active_preset.mode == "v2v" else self.active_preset.mode,
             output_type="pil",
             frame_buffer_size=frame_buffer_size,
-            width=self.config.width,
-            height=self.config.height,
+            width=infer_w,
+            height=infer_h,
             warmup=self.active_preset.warmup,
             acceleration=acceleration,
+            attention_backend=self.config.attention_backend,
             use_lcm_lora=self.active_preset.use_lcm_lora,
             use_tiny_vae=self.use_tiny_vae,
             vae_id=self.vae_id,
@@ -625,19 +849,37 @@ class StreamWorker:
             seed=self.seed,
             engine_dir=self.config.engine_dir,
         )
-        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+        if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
             wrapper_kwargs = dict(
                 model_id_or_path=self.active_preset.model_id_or_path,
                 t_index_list=self.active_preset.t_index_list,
-                width=self.config.width,
-                height=self.config.height,
+                width=infer_w,
+                height=infer_h,
                 frame_buffer_size=frame_buffer_size,
-                guidance_scale=1.0,
+                guidance_scale=self.guidance_scale if not is_flux_preset(
+                    pipeline=self.active_preset.pipeline,
+                    name=self.active_preset.name,
+                ) else 1.0,
                 seed=self.seed,
                 flux_transformer_engine=self.config.flux_transformer_engine,
+                attention_backend=self.config.attention_backend,
+                modelopt_enabled=self.config.modelopt_enabled,
+                modelopt_checkpoint=self.config.modelopt_checkpoint,
                 warmup=self.active_preset.warmup,
             )
         self.wrapper = wrapper_cls(**wrapper_kwargs)
+        active_accel = self._active_acceleration()
+        requested = resolve_acceleration(self.config.acceleration, self.active_preset.acceleration)
+        if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+            requested = str(self.config.attention_backend)
+        label = normalize_accel_label(active_accel, requested)
+        detail = ""
+        if label == "none":
+            if requested and normalize_accel_label(requested, requested) != "none":
+                detail = f"requested {requested}"
+            elif active_accel and active_accel not in ("none", "sdpa"):
+                detail = str(active_accel)
+        log_acceleration(active_accel, requested=requested, detail=detail)
         print(
             f"[stream_worker] loaded {self.active_preset.name} "
             f"({self.active_preset.model_id_or_path}) "
@@ -646,8 +888,25 @@ class StreamWorker:
         )
         self._prepare_current_prompt()
         self._apply_prompt_embeddings()
+        self._ensure_upscaler()
         self._needs_reload = False
         self.state.update(loading=False, status="running")
+
+    def _active_acceleration(self) -> str:
+        if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+            if self.wrapper is None:
+                return "none"
+            attention = getattr(self.wrapper, "_attention_active", None)
+            runtime = getattr(self.wrapper, "_runtime_mode", "transformer")
+            if attention:
+                return f"{runtime}+{attention}"
+            return str(runtime)
+        stream = getattr(self.wrapper, "stream", None) if self.wrapper is not None else None
+        if stream is not None:
+            active = getattr(stream, "_sdtd_acceleration_active", None)
+            if active:
+                return str(active)
+        return resolve_acceleration(self.config.acceleration, self.active_preset.acceleration)
 
     def _prepare_current_prompt(self) -> None:
         if self.wrapper is None:
@@ -660,7 +919,7 @@ class StreamWorker:
                 delta=self.delta,
                 seed=self.seed,
             )
-        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+        if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
             return
         if hasattr(self.wrapper, "stream") and hasattr(self.wrapper.stream, "generator"):
             if self.wrapper.stream.generator is not None:
@@ -669,8 +928,11 @@ class StreamWorker:
     def _apply_prompt_embeddings(self) -> None:
         if self.wrapper is None or not self.prompt_entries:
             return
-        if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
-            self.wrapper.prompt = " | ".join(entry["text"] for entry in self.prompt_entries)
+        if is_transformer_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+            if is_flux_preset(pipeline=self.active_preset.pipeline, name=self.active_preset.name):
+                self.wrapper.prompt = " | ".join(entry["text"] for entry in self.prompt_entries)
+            elif hasattr(self.wrapper, "prepare"):
+                self.wrapper.prompt = " | ".join(entry["text"] for entry in self.prompt_entries)
             return
         if len(self.prompt_entries) == 1:
             self.wrapper.stream.update_prompt(self.prompt_entries[0]["text"])
@@ -707,7 +969,21 @@ class StreamWorker:
             blended_pooled = torch.stack(pooled_embeds, dim=0).sum(dim=0) / total_weight
             _repeat_added(stream, blended_pooled.to(device=stream.device, dtype=stream.dtype))
 
+    def _release_upscaler(self) -> None:
+        if self.upscaler is not None and hasattr(self.upscaler, "close"):
+            self.upscaler.close()
+        self.upscaler = None
+        self._upscaler_loaded = False
+
+    def _ensure_upscaler(self) -> None:
+        if self._upscaler_loaded:
+            return
+        self._reload_upscaler()
+        self._upscaler_loaded = True
+
     def _reload_upscaler(self) -> None:
+        if self.upscaler is not None and hasattr(self.upscaler, "close"):
+            self.upscaler.close()
         self.upscaler = create_upscaler(
             enabled=self.config.upscale_enabled,
             factor=self.config.upscale_factor,
@@ -769,10 +1045,24 @@ class StreamWorker:
         extra["pipeline"] = self.active_preset.pipeline
         extra["frame_buffer_size"] = self.config.frame_buffer_size
         extra["flux_transformer_engine"] = self.config.flux_transformer_engine
+        extra["acceleration"] = resolve_acceleration(
+            self.config.acceleration,
+            self.active_preset.acceleration,
+        )
+        extra["acceleration_active"] = self._active_acceleration()
+        extra["attention_backend"] = self.config.attention_backend
+        if self.wrapper is not None:
+            extra["attention_active"] = getattr(self.wrapper, "_attention_active", None) or getattr(
+                getattr(self.wrapper, "stream", None),
+                "_sdtd_acceleration_active",
+                None,
+            )
         if self.upscaler is not None:
             out_w, out_h = self.upscaler.output_size(self.config.width, self.config.height)
-            extra["output_width"] = out_w
-            extra["output_height"] = out_h
+        else:
+            out_w, out_h = self.config.output_resolution()
+        extra["output_width"] = out_w
+        extra["output_height"] = out_h
         state.extra = extra
 
 

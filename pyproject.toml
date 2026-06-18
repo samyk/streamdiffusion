@@ -44,6 +44,8 @@ sdtd-bridge = "streamdiffusion_td_bridge.cli:main"
 sdtd-latency-probe = "streamdiffusion_td_bridge.latency_probe:main"
 sdtd-verify-gpu = "streamdiffusion_td_bridge.verify_gpu:main"
 sdtd-verify-inference = "streamdiffusion_td_bridge.verify_inference:main"
+sdtd-verify-tensorrt = "streamdiffusion_td_bridge.verify_tensorrt:main"
+sdtd-verify-attention = "streamdiffusion_td_bridge.verify_attention:main"
 sdtd-touchdesigner-helper = "streamdiffusion_td_bridge.touchdesigner_helper:main"
 
 [tool.setuptools.packages.find]

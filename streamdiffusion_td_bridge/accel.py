@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import warnings
-
 from .config import Acceleration
 
 
@@ -16,20 +14,8 @@ def gpu_capability() -> tuple[int, int] | None:
 
 
 def resolve_acceleration(requested: Acceleration | None, preset_default: Acceleration) -> Acceleration:
-    acceleration = requested or preset_default
-    if acceleration == "none":
+    accel: Acceleration = requested or preset_default
+    # FLUX.2 Klein uses diffusers eager/compile; StreamDiffusion TRT is incompatible.
+    if preset_default == "none" and accel == "tensorrt":
         return "none"
-
-    capability = gpu_capability()
-    if capability is None:
-        return acceleration
-
-    major, _minor = capability
-    if major >= 12 and acceleration in ("xformers", "tensorrt"):
-        warnings.warn(
-            f"Requested acceleration={acceleration!r} is not supported on "
-            f"Blackwell/sm_{major}{_minor} yet; falling back to acceleration='none'.",
-            stacklevel=2,
-        )
-        return "none"
-    return acceleration
+    return accel

@@ -216,9 +216,22 @@ class NdiVideoOutput:
 
         create = self.ndi.SendCreate()
         create.ndi_name = name
-        self.sender = self.ndi.send_create(create)
+        self.sender = None
+        for attempt in range(12):
+            self.sender = self.ndi.send_create(create)
+            if self.sender is not None:
+                break
+            if attempt == 0:
+                print(
+                    f"[ndi] waiting for NDI sender {name!r} "
+                    "(previous bridge may still be releasing it)..."
+                )
+            time.sleep(0.5)
         if self.sender is None:
-            raise NdiError(f"Could not create NDI sender {name!r}")
+            raise NdiError(
+                f"Could not create NDI sender {name!r} after retries "
+                "(name still in use? stop other sdtd-bridge processes first)"
+            )
 
     def write(self, frame: VideoFrame) -> None:
         rgb = np.ascontiguousarray(frame.data[:, :, :3])

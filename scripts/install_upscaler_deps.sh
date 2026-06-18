@@ -11,8 +11,7 @@ pip install nvidia-vfx
 echo "Installing Real-ESRGAN fallback (spandrel)..."
 pip install spandrel
 
-# torch 2.10 pins cuda-bindings==12.9.4; cuda-python 12.9.7+ conflicts with that.
-pip install "cuda-bindings==12.9.4" "cuda-python==12.9.4"
+# cu132 PyTorch wheels bundle CUDA 13.2 runtime libs; avoid pinning cuda-bindings 12.x.
 
 MODEL_DIR="${ROOT}/engines/models"
 mkdir -p "${MODEL_DIR}"

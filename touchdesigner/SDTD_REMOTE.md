@@ -28,7 +28,7 @@ Control uses **Daydream-style REST** (not WebRTC).
 cd ~/c/samysd
 source .venv/bin/activate
 source scripts/env_cuda.sh
-sdtd-bridge --acceleration none --preset sd_turbo_fast \
+sdtd-bridge --acceleration tensorrt --preset sd_turbo_fast \
   --input-name td_streamdiffusion_in \
   --output-name streamdiffusion_out \
   --daydream-port 8780

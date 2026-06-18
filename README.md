@@ -27,7 +27,7 @@ sudo apt-get install -y python3-venv python3-dev avahi-daemon curl
 ./scripts/setup_blackwell_linux.sh
 ```
 
-Blackwell needs CUDA 12.8+ PyTorch with `sm_120`:
+Blackwell needs CUDA 13.2 PyTorch nightly (`cu132`) with `sm_120`:
 
 ```bash
 sdtd-verify-gpu
@@ -37,12 +37,13 @@ sdtd-verify-inference
 Repair mismatched wheels:
 
 ```bash
-./scripts/install_pytorch_cu128.sh
+./scripts/install_pytorch_cu132.sh
 ./scripts/fix_inference_deps.sh
 ```
 
-On Blackwell (`sm_120`), StreamDiffusion TensorRT/xformers are unsupported. Use
-`--acceleration none` (auto-fallback is built in).
+StreamDiffusion on Blackwell uses **TensorRT** by default (`acceleration=tensorrt` in
+`streamdiffusion_td_bridge/defaults.py` and TD `hal_control`). FLUX.2 Klein still uses
+`acceleration=none` (separate pipeline).
 
 ### Optional stacks
 
@@ -76,7 +77,7 @@ TD: send `td_streamdiffusion_in`, receive `streamdiffusion_out`.
 ./scripts/run_bridge_screen.sh "your prompt"
 # or
 sdtd-bridge --preset sdxl_turbo_fast --width 768 --height 768 \
-  --acceleration none --prompt "your prompt"
+  --acceleration tensorrt --prompt "your prompt"
 ```
 
 ### FLUX.2 Klein
@@ -159,7 +160,7 @@ sdtd-bridge --help
 | `--guidance-scale` | 1.1 | CFG scale |
 | `--delta` | 1.0 | RCFG delta |
 | `--seed` | 2 | Seed |
-| `--acceleration` | preset | `none`, `xformers`, `tensorrt` |
+| `--acceleration` | `tensorrt` | `none`, `xformers`, `tensorrt` |
 | `--engine-dir` | `engines` | TensorRT cache dir |
 | `--passthrough-test` | off | Skip model load |
 
@@ -350,12 +351,12 @@ sdtd-latency-probe --video-backend ndi --preset passthrough --seconds 10
 | Issue | Fix |
 |---|---|
 | `No module named 'diffusers'` | `./scripts/fix_inference_deps.sh` |
-| `sm_120` missing | `./scripts/install_pytorch_cu128.sh` |
+| `sm_120` missing | `./scripts/install_pytorch_cu132.sh` |
 | FLUX import error | `./scripts/install_flux2_klein_deps.sh` |
 | SD broken after FLUX install | `./scripts/fix_inference_deps.sh` |
 | NDI not found | `avahi-daemon`, check VLAN multicast |
 | Slow upscale | `SDTD_UPSCALE_METHOD=maxine-vsr` or infer at 512 |
-| Blackwell TRT fails | Use `--acceleration none` |
+| TensorRT engine build fails | Check `engines/` cache; try `--acceleration xformers` temporarily |
 
 ## Project Layout
 

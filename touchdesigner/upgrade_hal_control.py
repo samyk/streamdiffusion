@@ -26,6 +26,10 @@ importlib.reload(hal_control_defs)
 from hal_control_defs import (
     HAL_CONTROL_PAGE,
     TD_HAL_DEFAULTS,
+    ATTENTION_BACKEND_LABELS,
+    ATTENTION_BACKEND_NAMES,
+    PRESET_MENU_LABELS,
+    PRESET_MENU_NAMES,
     UPSCALE_FACTOR_LABELS,
     UPSCALE_FACTOR_NAMES,
     UPSCALE_MAXINE_QUALITY_LABELS,
@@ -147,42 +151,46 @@ _ensure_float(display, "Textlift", "Text Lift (px)", TD_HAL_DEFAULTS["Textlift"]
 
 model = _page("Model")
 if hasattr(ctrl.par, "Preset"):
-    ctrl.par.Preset.menuNames = [
-        "sdxl_turbo_fast",
-        "sdxl_turbo_quality",
-        "sd_turbo_fast",
-        "sd_turbo_quality",
-        "lcm_lora_style",
-        "flux2_klein_fast",
-        "flux2_klein_quality",
-        "flux2_klein_9b",
-        "passthrough",
-    ]
-    ctrl.par.Preset.menuLabels = [
-        "SDXL Turbo Fast",
-        "SDXL Turbo Quality",
-        "SD Turbo Fast",
-        "SD Turbo Quality",
-        "SD1.5 LCM LoRA",
-        "FLUX.2 Klein Fast (4B)",
-        "FLUX.2 Klein Quality (4B)",
-        "FLUX.2 Klein 9B",
-        "Passthrough",
-    ]
+    ctrl.par.Preset.menuNames = PRESET_MENU_NAMES
+    ctrl.par.Preset.menuLabels = PRESET_MENU_LABELS
+_ensure_menu(
+    model,
+    "Attentionbackend",
+    "Attention Backend (FLUX / SD3.5 DiT)",
+    ATTENTION_BACKEND_NAMES,
+    ATTENTION_BACKEND_LABELS,
+    TD_HAL_DEFAULTS["Attentionbackend"],
+)
+if hasattr(ctrl.par, "Acceleration"):
+    ctrl.par.Acceleration.label = "Acceleration (SD Turbo / SDXL only)"
+_ensure_toggle(
+    quality,
+    "Modeloptenabled",
+    "ModelOpt Quant (SD3.5 / DiT, optional)",
+    bool(TD_HAL_DEFAULTS["Modeloptenabled"]),
+)
+_ensure_str(
+    quality,
+    "Modeloptcheckpoint",
+    "ModelOpt Checkpoint (.pt path on hal)",
+    TD_HAL_DEFAULTS["Modeloptcheckpoint"],
+)
+if hasattr(ctrl.par, "Fluxtransformerengine"):
+    ctrl.par.Fluxtransformerengine.label = "DiT/FLUX Blackwell Compile (torch.compile)"
 
 denoise_page = _page("Denoise")
 if denoise_page is None:
     denoise_page = _page("AI")
 if hasattr(ctrl.par, "Denoise"):
-    ctrl.par.Denoise.label = "Steps (Klein 1-6) / T-index 1 (Turbo 1-49)"
+    ctrl.par.Denoise.label = "Steps (Klein/SD3.5 1-6) / T-index 1 (Turbo 1-49)"
     if hasattr(ctrl.par.Denoise, "normMin"):
         ctrl.par.Denoise.normMin = 1
     if hasattr(ctrl.par.Denoise, "normMax"):
         ctrl.par.Denoise.normMax = 49
 for name, label in (
-    ("Step2", "Extra step (Klein) / T-index 2 (Turbo, 0=off)"),
-    ("Step3", "Extra step (Klein) / T-index 3 (Turbo)"),
-    ("Step4", "Extra step (Klein) / T-index 4 (Turbo)"),
+    ("Step2", "Extra step (Klein/SD3.5) / T-index 2 (Turbo, 0=off)"),
+    ("Step3", "Extra step (Klein/SD3.5) / T-index 3 (Turbo)"),
+    ("Step4", "Extra step (Klein/SD3.5) / T-index 4 (Turbo)"),
 ):
     if hasattr(ctrl.par, name):
         getattr(ctrl.par, name).label = label

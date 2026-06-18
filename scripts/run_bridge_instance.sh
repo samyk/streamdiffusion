@@ -42,12 +42,12 @@ fi
 
 screen -S "${SESSION}" -X quit 2>/dev/null || true
 pkill -f "sdtd-bridge.*--input-name ${INPUT_NAME} --" 2>/dev/null || true
-sleep 1
+sleep 3
 
 sdtd_print_settings "${INSTANCE}" "${PROMPT}"
 
 RUN_CMD="cd '${ROOT}' && source .venv/bin/activate && source scripts/env_cuda.sh && exec sdtd-bridge \
-  --acceleration none \
+  --acceleration ${SDTD_RESOLVED_ACCELERATION} \
   --preset ${PRESET} \
   --input-name ${INPUT_NAME} \
   --output-name ${OUTPUT_NAME} \

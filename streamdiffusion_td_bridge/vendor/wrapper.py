@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import traceback
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +12,9 @@ from PIL import Image
 
 from streamdiffusion import StreamDiffusion
 from streamdiffusion.image_utils import postprocess_image
+
+from streamdiffusion_td_bridge.attention import apply_attention, normalize_attention_backend
+from streamdiffusion_td_bridge.blackwell import tune_cuda_for_inference
 
 from .sdxl_patch import patch_stream_for_sdxl
 
@@ -54,8 +58,7 @@ def _configure_full_vae(stream: StreamDiffusion, model_id_or_path: str) -> None:
 
 
 torch.set_grad_enabled(False)
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
+tune_cuda_for_inference()
 
 
 class StreamDiffusionWrapper:
@@ -81,6 +84,7 @@ class StreamDiffusionWrapper:
         height: int = 512,
         warmup: int = 10,
         acceleration: Literal["none", "xformers", "tensorrt"] = "tensorrt",
+        attention_backend: str = "auto",
         do_add_noise: bool = True,
         use_lcm_lora: bool = True,
         use_tiny_vae: bool = True,
@@ -118,6 +122,7 @@ class StreamDiffusionWrapper:
             lcm_lora_id=lcm_lora_id,
             vae_id=vae_id,
             acceleration=acceleration,
+            attention_backend=attention_backend,
             warmup=warmup,
             do_add_noise=do_add_noise,
             use_lcm_lora=use_lcm_lora,
@@ -152,11 +157,37 @@ class StreamDiffusionWrapper:
             seed=seed,
         )
 
+    def trt_unet_batch_size_for(self, t_index_list: list[int], frame_buffer_size: int) -> int:
+        """Compute StreamDiffusion TRT UNet batch size for the given schedule."""
+        steps = len(t_index_list)
+        frame_buffer_size = max(1, int(frame_buffer_size))
+        stream = self.stream
+        if not self.use_denoising_batch:
+            return frame_buffer_size
+        if stream.cfg_type == "initialize":
+            return (steps + 1) * frame_buffer_size
+        if stream.cfg_type == "full":
+            return 2 * steps * frame_buffer_size
+        return steps * frame_buffer_size
+
+    def trt_batch_matches(self, t_index_list: list[int], frame_buffer_size: int) -> bool:
+        active = getattr(self.stream, "_sdtd_acceleration_active", None)
+        if active != "tensorrt":
+            return True
+        needed = self.trt_unet_batch_size_for(t_index_list, frame_buffer_size)
+        return needed == int(self.stream.trt_unet_batch_size)
+
     def reconfigure_batch(self, t_index_list: list[int], frame_buffer_size: int) -> None:
         """Hot-update denoise steps / frame buffer without reloading the pipeline."""
         if not t_index_list:
             raise ValueError("t_index_list must not be empty")
         frame_buffer_size = max(1, int(frame_buffer_size))
+        if not self.trt_batch_matches(t_index_list, frame_buffer_size):
+            needed = self.trt_unet_batch_size_for(t_index_list, frame_buffer_size)
+            current = int(self.stream.trt_unet_batch_size)
+            raise RuntimeError(
+                f"TensorRT UNet batch size {current} != required {needed}; reload model to rebuild engines"
+            )
         self.frame_buffer_size = frame_buffer_size
         self.batch_size = (
             len(t_index_list) * frame_buffer_size
@@ -367,6 +398,7 @@ class StreamDiffusionWrapper:
         lcm_lora_id: str | None,
         vae_id: str | None,
         acceleration: Literal["none", "xformers", "tensorrt"],
+        attention_backend: str,
         warmup: int,
         do_add_noise: bool,
         use_lcm_lora: bool,
@@ -410,16 +442,43 @@ class StreamDiffusionWrapper:
         else:
             _configure_full_vae(stream, model_id_or_path)
 
-        if acceleration == "xformers":
-            try:
-                stream.pipe.enable_xformers_memory_efficient_attention()
-            except Exception as exc:  # noqa: BLE001 - fall back for unsupported GPUs
-                print(f"xformers acceleration failed ({type(exc).__name__}: {exc}); continuing without it.")
-        elif acceleration == "tensorrt":
+        acceleration_active = "none"
+        if acceleration == "tensorrt":
             try:
                 _accelerate_with_tensorrt(stream, self, model_id_or_path, engine_dir)
-            except Exception as exc:  # noqa: BLE001 - fall back for unsupported GPUs
-                print(f"TensorRT acceleration failed ({type(exc).__name__}: {exc}); continuing without it.")
+                acceleration_active = "tensorrt"
+            except Exception:  # noqa: BLE001 - fall back for unsupported GPUs
+                print("TensorRT acceleration failed; continuing without it.")
+                traceback.print_exc()
+                acceleration_active = "none"
+        elif acceleration == "xformers":
+            try:
+                acceleration_active = apply_attention(
+                    pipe,
+                    "xformers",
+                    kind="unet",
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"xformers failed ({type(exc).__name__}: {exc}); falling back to sdpa.")
+                acceleration_active = apply_attention(pipe, "sdpa", kind="unet")
+        else:
+            backend = attention_backend
+            try:
+                acceleration_active = apply_attention(
+                    pipe,
+                    backend,
+                    kind="unet",
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"[streamdiffusion] attention backend {backend!r} failed "
+                    f"({type(exc).__name__}: {exc}); falling back to sdpa."
+                )
+                acceleration_active = apply_attention(pipe, "sdpa", kind="unet")
+
+        setattr(stream, "_sdtd_acceleration_requested", acceleration)
+        setattr(stream, "_sdtd_attention_backend", normalize_attention_backend(attention_backend))
+        setattr(stream, "_sdtd_acceleration_active", acceleration_active)
 
         if seed < 0:
             seed = int(np.random.randint(0, 1_000_000))
@@ -449,6 +508,13 @@ def _accelerate_with_tensorrt(
     engine_dir: str | Path,
 ) -> None:
     try:
+        from streamdiffusion_td_bridge.cuda_compat import ensure_cuda_cudart_importable
+
+        ensure_cuda_cudart_importable()
+        from streamdiffusion_td_bridge.vendor.tensorrt_export_patch import apply_tensorrt_patches
+
+        apply_tensorrt_patches()
+        from streamdiffusion_td_bridge.vendor.tensorrt_build_patch import unet_cross_attention_dim
         from polygraphy import cuda
         from streamdiffusion.acceleration.tensorrt import (
             TorchVAEEncoder,
@@ -464,19 +530,32 @@ def _accelerate_with_tensorrt(
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(
             "TensorRT acceleration requested but StreamDiffusion TensorRT dependencies "
-            "are unavailable. Run `python -m streamdiffusion.tools.install-tensorrt`."
+            "are unavailable. Run `./scripts/install_tensorrt_deps.sh`. "
+            f"Root cause: {type(exc).__name__}: {exc}"
         ) from exc
 
     engine_dir = Path(engine_dir)
+    trt_w, trt_h = _trt_engine_size(wrapper)
     prefix = _engine_prefix(
         model_id_or_path,
         wrapper.mode,
         wrapper.batch_size,
         wrapper.frame_buffer_size,
+        trt_w,
+        trt_h,
     )
+    trt_build_opts = {
+        "opt_image_height": trt_h,
+        "opt_image_width": trt_w,
+    }
     unet_path = engine_dir / prefix / "unet.engine"
     vae_encoder_path = engine_dir / prefix / "vae_encoder.engine"
     vae_decoder_path = engine_dir / prefix / "vae_decoder.engine"
+
+    from streamdiffusion_td_bridge.vendor.tensorrt_build_patch import remove_invalid_trt_engine
+
+    for path in (unet_path, vae_encoder_path, vae_decoder_path):
+        remove_invalid_trt_engine(path)
 
     if not unet_path.exists():
         unet_path.parent.mkdir(parents=True, exist_ok=True)
@@ -485,7 +564,7 @@ def _accelerate_with_tensorrt(
             device=stream.device,
             max_batch_size=stream.trt_unet_batch_size,
             min_batch_size=stream.trt_unet_batch_size,
-            embedding_dim=stream.text_encoder.config.hidden_size,
+            embedding_dim=unet_cross_attention_dim(stream.unet),
             unet_dim=stream.unet.config.in_channels,
         )
         compile_unet(
@@ -495,6 +574,7 @@ def _accelerate_with_tensorrt(
             str(unet_path) + ".opt.onnx",
             str(unet_path),
             opt_batch_size=stream.trt_unet_batch_size,
+            engine_build_options=trt_build_opts,
         )
 
     vae_batch = wrapper.batch_size if wrapper.mode == "txt2img" else stream.frame_bff_size
@@ -508,6 +588,7 @@ def _accelerate_with_tensorrt(
             str(vae_decoder_path) + ".opt.onnx",
             str(vae_decoder_path),
             opt_batch_size=vae_batch,
+            engine_build_options=trt_build_opts,
         )
         delattr(stream.vae, "forward")
 
@@ -521,6 +602,7 @@ def _accelerate_with_tensorrt(
             str(vae_encoder_path) + ".opt.onnx",
             str(vae_encoder_path),
             opt_batch_size=vae_batch,
+            engine_build_options=trt_build_opts,
         )
 
     cuda_stream = cuda.Stream()
@@ -540,13 +622,24 @@ def _accelerate_with_tensorrt(
     torch.cuda.empty_cache()
 
 
+def _trt_engine_size(wrapper: StreamDiffusionWrapper) -> tuple[int, int]:
+    from streamdiffusion_td_bridge.control import normalize_resolution
+
+    return normalize_resolution(wrapper.width, wrapper.height)
+
+
 def _engine_prefix(
     model_id_or_path: str,
     mode: str,
     batch_size: int,
     frame_buffer_size: int,
+    width: int,
+    height: int,
 ) -> str:
     model = Path(model_id_or_path).stem if Path(model_id_or_path).exists() else model_id_or_path
     safe_model = model.replace("/", "--").replace(":", "_")
-    return f"{safe_model}--mode-{mode}--batch-{batch_size}--frame-buffer-{frame_buffer_size}"
+    return (
+        f"{safe_model}--mode-{mode}--batch-{batch_size}--frame-buffer-{frame_buffer_size}"
+        f"--{width}x{height}"
+    )
 

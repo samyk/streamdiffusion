@@ -7,13 +7,34 @@ def clamp_t_index(value: float) -> int:
     return max(0, min(49, int(round(value))))
 
 
-def normalize_resolution(width: int, height: int) -> tuple[int, int]:
-    """Snap to multiples of 8 and keep within a practical StreamDiffusion range."""
+def normalize_resolution(width: int, height: int, *, align: int = 8) -> tuple[int, int]:
+    """Snap to multiples of `align` and keep within a practical inference range."""
+    align = max(8, int(align))
     width = max(256, min(1536, int(width)))
     height = max(256, min(1536, int(height)))
-    width = max(8, (width // 8) * 8)
-    height = max(8, (height // 8) * 8)
+    width = max(align, (width // align) * align)
+    height = max(align, (height // align) * align)
     return width, height
+
+
+def resolution_align_for_preset(*, pipeline: str, name: str = "") -> int:
+    from streamdiffusion_td_bridge.config import is_transformer_preset
+
+    return 16 if is_transformer_preset(pipeline=pipeline, name=name) else 8
+
+
+def normalize_resolution_for_preset(
+    width: int,
+    height: int,
+    *,
+    pipeline: str,
+    name: str = "",
+) -> tuple[int, int]:
+    return normalize_resolution(
+        width,
+        height,
+        align=resolution_align_for_preset(pipeline=pipeline, name=name),
+    )
 
 
 def denoise_to_t_index(value: float, *, normalized: bool = False) -> int:

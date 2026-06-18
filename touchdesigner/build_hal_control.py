@@ -26,6 +26,10 @@ from td_hal_defs import (
     HAL_CONTROL_PAGE,
     HAL_SYNC_PARSCOPE,
     TD_HAL_DEFAULTS,
+    ATTENTION_BACKEND_LABELS,
+    ATTENTION_BACKEND_NAMES,
+    PRESET_MENU_LABELS,
+    PRESET_MENU_NAMES,
     UPSCALE_FACTOR_LABELS,
     UPSCALE_FACTOR_NAMES,
     UPSCALE_MAXINE_QUALITY_LABELS,
@@ -99,15 +103,15 @@ ctrl.par.Promptinterp = "average"
 
 # --- Denoise ---
 _section("Denoise")
-denoise = pg.appendInt("Denoise", label="Steps (Klein 1-6) / T-index 1 (Turbo 1-49)")
+denoise = pg.appendInt("Denoise", label="Steps (Klein/SD3.5 1-6) / T-index 1 (Turbo 1-49)")
 denoise.normMin = 1
 denoise.normMax = 49
 ctrl.par.Denoise = TD_HAL_DEFAULTS["Denoise"]
 _start_section("Denoise")
 for name, label in (
-    ("Step2", "Extra step (Klein) / T-index 2 (Turbo, 0=off)"),
-    ("Step3", "Extra step (Klein) / T-index 3 (Turbo)"),
-    ("Step4", "Extra step (Klein) / T-index 4 (Turbo)"),
+    ("Step2", "Extra step (Klein/SD3.5) / T-index 2 (Turbo, 0=off)"),
+    ("Step3", "Extra step (Klein/SD3.5) / T-index 3 (Turbo)"),
+    ("Step4", "Extra step (Klein/SD3.5) / T-index 4 (Turbo)"),
 ):
     step = pg.appendInt(name, label=label)
     step.normMin = 0
@@ -117,28 +121,8 @@ for name, label in (
 # --- Model ---
 _section("Model")
 pg.appendMenu("Preset", label="Preset")
-ctrl.par.Preset.menuNames = [
-    "sdxl_turbo_fast",
-    "sdxl_turbo_quality",
-    "sd_turbo_fast",
-    "sd_turbo_quality",
-    "lcm_lora_style",
-    "flux2_klein_fast",
-    "flux2_klein_quality",
-    "flux2_klein_9b",
-    "passthrough",
-]
-ctrl.par.Preset.menuLabels = [
-    "SDXL Turbo Fast",
-    "SDXL Turbo Quality",
-    "SD Turbo Fast",
-    "SD Turbo Quality",
-    "SD1.5 LCM LoRA",
-    "FLUX.2 Klein Fast (4B)",
-    "FLUX.2 Klein Quality (4B)",
-    "FLUX.2 Klein 9B",
-    "Passthrough",
-]
+ctrl.par.Preset.menuNames = PRESET_MENU_NAMES
+ctrl.par.Preset.menuLabels = PRESET_MENU_LABELS
 ctrl.par.Preset = TD_HAL_DEFAULTS["Preset"]
 _start_section("Preset")
 pg.appendStr("Modelid", label="Custom Model (HF id or .safetensors)")
@@ -147,10 +131,14 @@ pg.appendMenu("Sdmode", label="Mode")
 ctrl.par.Sdmode.menuNames = ["img2img", "txt2img", "v2v", "passthrough"]
 ctrl.par.Sdmode.menuLabels = ["img2img", "txt2img", "v2v (TRT only)", "passthrough"]
 ctrl.par.Sdmode = TD_HAL_DEFAULTS["Sdmode"]
-pg.appendMenu("Acceleration", label="Acceleration")
+pg.appendMenu("Acceleration", label="Acceleration (SD Turbo / SDXL only)")
 ctrl.par.Acceleration.menuNames = ["none", "xformers", "tensorrt"]
-ctrl.par.Acceleration.menuLabels = ["none (Blackwell)", "xformers", "tensorrt"]
+ctrl.par.Acceleration.menuLabels = ["none", "xformers", "tensorrt (default)"]
 ctrl.par.Acceleration = TD_HAL_DEFAULTS["Acceleration"]
+pg.appendMenu("Attentionbackend", label="Attention Backend (FLUX / SD3.5 DiT)")
+ctrl.par.Attentionbackend.menuNames = ATTENTION_BACKEND_NAMES
+ctrl.par.Attentionbackend.menuLabels = ATTENTION_BACKEND_LABELS
+ctrl.par.Attentionbackend = TD_HAL_DEFAULTS["Attentionbackend"]
 
 # --- Quality ---
 _section("Quality")
@@ -163,8 +151,12 @@ framebatch = pg.appendInt("Framebatch", label="Frame Batch Count")
 framebatch.normMin = 1
 framebatch.normMax = 8
 ctrl.par.Framebatch = TD_HAL_DEFAULTS["Framebatch"]
-pg.appendToggle("Fluxtransformerengine", label="FLUX Blackwell Transformer Engine")
+pg.appendToggle("Fluxtransformerengine", label="DiT/FLUX Blackwell Compile (torch.compile)")
 ctrl.par.Fluxtransformerengine = TD_HAL_DEFAULTS["Fluxtransformerengine"]
+pg.appendToggle("Modeloptenabled", label="ModelOpt Quant (SD3.5 / DiT, optional)")
+ctrl.par.Modeloptenabled = TD_HAL_DEFAULTS["Modeloptenabled"]
+pg.appendStr("Modeloptcheckpoint", label="ModelOpt Checkpoint (.pt path on hal)")
+ctrl.par.Modeloptcheckpoint = TD_HAL_DEFAULTS["Modeloptcheckpoint"]
 pg.appendFloat("Guidance", label="Guidance Scale")
 ctrl.par.Guidance = TD_HAL_DEFAULTS["Guidance"]
 pg.appendFloat("Delta", label="Delta")

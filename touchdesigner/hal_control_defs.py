@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -9,6 +10,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+import streamdiffusion_td_bridge.defaults as _bridge_defaults  # noqa: E402
+
+importlib.reload(_bridge_defaults)
 from streamdiffusion_td_bridge.defaults import (  # noqa: E402
     DAYDREAM_PORT,
     HAL_BRIDGE_LAUNCH_DEFAULTS,
@@ -43,11 +47,59 @@ UPSCALE_MAXINE_QUALITY_LABELS = [
     "High bitrate — Ultra",
 ]
 
+ATTENTION_BACKEND_NAMES = ["auto", "flash", "sage", "xformers", "sdpa", "none"]
+ATTENTION_BACKEND_LABELS = [
+    "Auto (flash → sage → xformers → sdpa)",
+    "FlashAttention",
+    "SageAttention",
+    "xFormers",
+    "PyTorch SDPA",
+    "None (eager)",
+]
+
 FLUX_KLEIN_PRESETS = {
     "flux2_klein_fast",
     "flux2_klein_quality",
     "flux2_klein_9b",
 }
+
+DIT_PRESETS = {
+    "sd35_medium_fast",
+    "sd35_medium_quality",
+    "sd35_large_fast",
+}
+
+TRANSFORMER_PRESETS = FLUX_KLEIN_PRESETS | DIT_PRESETS
+
+PRESET_MENU_NAMES = [
+    "sdxl_turbo_fast",
+    "sdxl_turbo_quality",
+    "sd_turbo_fast",
+    "sd_turbo_quality",
+    "lcm_lora_style",
+    "flux2_klein_fast",
+    "flux2_klein_quality",
+    "flux2_klein_9b",
+    "sd35_medium_fast",
+    "sd35_medium_quality",
+    "sd35_large_fast",
+    "passthrough",
+]
+
+PRESET_MENU_LABELS = [
+    "SDXL Turbo Fast",
+    "SDXL Turbo Quality",
+    "SD Turbo Fast",
+    "SD Turbo Quality",
+    "SD1.5 LCM LoRA",
+    "FLUX.2 Klein Fast (4B)",
+    "FLUX.2 Klein Quality (4B)",
+    "FLUX.2 Klein 9B",
+    "SD3.5 Medium Fast",
+    "SD3.5 Medium Quality",
+    "SD3.5 Large Fast",
+    "Passthrough",
+]
 
 KLEIN_MAX_STEPS = 6
 
@@ -68,6 +120,9 @@ PRESET_DENOISE_STEPS = {
     "flux2_klein_fast": [1, 2, 3, 4],
     "flux2_klein_quality": [1, 2, 3, 4],
     "flux2_klein_9b": [1, 2, 3, 4],
+    "sd35_medium_fast": [1, 2, 3, 4],
+    "sd35_medium_quality": [1, 2, 3, 4, 5, 6],
+    "sd35_large_fast": [1, 2, 3, 4],
     "passthrough": [35],
 }
 
@@ -112,7 +167,7 @@ def denoise_steps_from_control(ctrl, preset: str | None = None) -> list[int]:
     step2 = int(ctrl.par.Step2)
     step3 = int(ctrl.par.Step3)
     step4 = int(ctrl.par.Step4)
-    if preset in FLUX_KLEIN_PRESETS:
+    if preset in TRANSFORMER_PRESETS or preset.startswith("sd3_"):
         return klein_steps_from_denoise(denoise, step2=step2, step3=step3, step4=step4)
     steps = turbo_steps_from_denoise(denoise, step2=step2, step3=step3, step4=step4)
     if not steps:
@@ -125,7 +180,7 @@ def denoise_steps_from_control(ctrl, preset: str | None = None) -> list[int]:
 def denoise_steps_match_preset(preset: str, steps: list[int]) -> bool:
     if not steps:
         return False
-    if preset in FLUX_KLEIN_PRESETS:
+    if preset in TRANSFORMER_PRESETS or preset.startswith("sd3_"):
         return 1 <= len(steps) <= KLEIN_MAX_STEPS
     return min(steps) >= 15
 
@@ -134,41 +189,49 @@ _bridge = HAL_BRIDGE_LAUNCH_DEFAULTS
 _denoise = _bridge["t_index_list"][0] if len(_bridge["t_index_list"]) == 1 else _bridge["t_index_list"][0]
 _step2 = _bridge["t_index_list"][1] if len(_bridge["t_index_list"]) > 1 else 0
 
+
+def _bridge_get(key: str, default):
+    return _bridge.get(key, default)
+
+
 # TouchDesigner hal_control defaults (synced from live instance A).
 TD_HAL_DEFAULTS = {
     "Remotehost": HAL_HOST,
     "Remoteport": DAYDREAM_PORT,
     "Streamid": STREAM_ID,
-    "Prompt": _bridge["prompt"],
-    "Negativeprompt": _bridge["negative_prompt"],
+    "Prompt": _bridge_get("prompt", ""),
+    "Negativeprompt": _bridge_get("negative_prompt", ""),
     "Prompt2": "",
     "Prompt2weight": 0.0,
     "Promptinterp": "average",
-    "Preset": _bridge["preset"],
-    "Width": _bridge["width"],
-    "Height": _bridge["height"],
+    "Preset": _bridge_get("preset", "sd_turbo_fast"),
+    "Width": _bridge_get("width", 960),
+    "Height": _bridge_get("height", 536),
     "Denoise": _denoise,
     "Step2": _step2,
     "Step3": 0,
     "Step4": 0,
-    "Sdmode": _bridge["sdmode"],
-    "Acceleration": _bridge["acceleration"],
-    "Framebatch": _bridge["frame_buffer_size"],
-    "Fluxtransformerengine": _bridge["flux_transformer_engine"],
-    "Guidance": _bridge["guidance_scale"],
-    "Delta": _bridge["delta"],
-    "Seed": _bridge["seed"],
-    "Usetinyvae": _bridge["use_tiny_vae"],
-    "Upscaleenabled": _bridge["upscale_enabled"],
-    "Upscalefactor": str(_bridge["upscale_factor"]),
-    "Upscalemethod": _bridge["upscale_method"],
-    "Upscalehalf": _bridge["upscale_half"],
-    "Upscalemaxinequality": _bridge["upscale_maxine_quality"],
+    "Sdmode": _bridge_get("sdmode", "img2img"),
+    "Acceleration": _bridge_get("acceleration", "tensorrt"),
+    "Attentionbackend": _bridge_get("attention_backend", "auto"),
+    "Modeloptenabled": _bridge_get("modelopt_enabled", False),
+    "Modeloptcheckpoint": _bridge_get("modelopt_checkpoint", "") or "",
+    "Framebatch": _bridge_get("frame_buffer_size", 1),
+    "Fluxtransformerengine": _bridge_get("flux_transformer_engine", True),
+    "Guidance": _bridge_get("guidance_scale", 1.1),
+    "Delta": _bridge_get("delta", 1.0),
+    "Seed": _bridge_get("seed", 2),
+    "Usetinyvae": _bridge_get("use_tiny_vae", True),
+    "Upscaleenabled": _bridge_get("upscale_enabled", True),
+    "Upscalefactor": str(_bridge_get("upscale_factor", 2)),
+    "Upscalemethod": _bridge_get("upscale_method", "maxine-vsr"),
+    "Upscalehalf": _bridge_get("upscale_half", True),
+    "Upscalemaxinequality": _bridge_get("upscale_maxine_quality", "high"),
     "Pipscale": 0.25,
     "Textscale": 1.0,
     "Textlift": 36,
-    "Filterthreshold": _bridge["similar_image_filter_threshold"],
-    "Filterskip": _bridge["similar_image_filter_max_skip_frame"],
+    "Filterthreshold": _bridge_get("similar_image_filter_threshold", 0.0),
+    "Filterskip": _bridge_get("similar_image_filter_max_skip_frame", 10),
     "Pausestream": False,
 }
 
@@ -194,8 +257,9 @@ HAL_CONTROL_PARSCOPE = (
     "Remotehost Remoteport Streamid Pushall "
     "Prompt Negativeprompt Prompt2 Prompt2weight Promptinterp "
     "Denoise Step2 Step3 Step4 "
-    "Preset Modelid Sdmode Acceleration "
+    "Preset Modelid Sdmode Acceleration Attentionbackend "
     "Width Height Framebatch Fluxtransformerengine Guidance Delta Seed "
+    "Modeloptenabled Modeloptcheckpoint "
     "Usetinyvae Vaeid "
     "Lora1path Lora1scale Lora2path Lora2scale Lora3path Lora3scale "
     "Upscaleenabled Upscalefactor Upscalemethod Upscalehalf "
@@ -209,8 +273,9 @@ HAL_CONTROL_PARSCOPE = (
 HAL_SYNC_PARSCOPE = (
     "Prompt Negativeprompt Prompt2 Prompt2weight Promptinterp "
     "Denoise Step2 Step3 Step4 "
-    "Preset Modelid Sdmode Acceleration "
+    "Preset Modelid Sdmode Acceleration Attentionbackend "
     "Width Height Framebatch Fluxtransformerengine Guidance Delta Seed "
+    "Modeloptenabled Modeloptcheckpoint "
     "Usetinyvae Vaeid "
     "Lora1path Lora1scale Lora2path Lora2scale Lora3path Lora3scale "
     "Upscaleenabled Upscalefactor Upscalemethod Upscalehalf "

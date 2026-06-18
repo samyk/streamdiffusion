@@ -24,6 +24,7 @@ sdtd_load_python_defaults() {
   SDTD_DEFAULT_UPSCALE_MAXINE_QUALITY=""
   SDTD_DEFAULT_FRAME_BUFFER_SIZE=""
   SDTD_DEFAULT_FLUX_TRANSFORMER_ENGINE=""
+  SDTD_DEFAULT_ATTENTION_BACKEND=""
   SDTD_DEFAULT_ACCELERATION=""
 
   if [[ ! -f "${root}/.venv/bin/activate" ]]; then
@@ -45,6 +46,7 @@ sdtd_load_python_defaults() {
       UPSCALE_MAXINE_QUALITY) SDTD_DEFAULT_UPSCALE_MAXINE_QUALITY="${val}" ;;
       FRAME_BUFFER_SIZE) SDTD_DEFAULT_FRAME_BUFFER_SIZE="${val}" ;;
       FLUX_TRANSFORMER_ENGINE) SDTD_DEFAULT_FLUX_TRANSFORMER_ENGINE="${val}" ;;
+      ATTENTION_BACKEND) SDTD_DEFAULT_ATTENTION_BACKEND="${val}" ;;
       ACCELERATION) SDTD_DEFAULT_ACCELERATION="${val}" ;;
     esac
   done < <(
@@ -63,6 +65,7 @@ print(f"UPSCALE_HALF={1 if d['upscale_half'] else 0}")
 print(f"UPSCALE_MAXINE_QUALITY={d['upscale_maxine_quality']}")
 print(f"FRAME_BUFFER_SIZE={d['frame_buffer_size']}")
 print(f"FLUX_TRANSFORMER_ENGINE={1 if d['flux_transformer_engine'] else 0}")
+print(f"ATTENTION_BACKEND={d['attention_backend']}")
 print(f"ACCELERATION={d['acceleration']}")
 PY
   )
@@ -111,7 +114,19 @@ sdtd_resolve_instance() {
   SDTD_RESOLVED_UPSCALE_MAXINE_QUALITY="${SDTD_UPSCALE_MAXINE_QUALITY:-${SDTD_DEFAULT_UPSCALE_MAXINE_QUALITY:-high}}"
   SDTD_RESOLVED_FRAME_BUFFER_SIZE="${SDTD_FRAME_BUFFER_SIZE:-${SDTD_DEFAULT_FRAME_BUFFER_SIZE:-}}"
   SDTD_RESOLVED_FLUX_TRANSFORMER_ENGINE="${SDTD_FLUX_TRANSFORMER_ENGINE:-${SDTD_DEFAULT_FLUX_TRANSFORMER_ENGINE:-1}}"
-  SDTD_RESOLVED_ACCELERATION="${SDTD_ACCELERATION:-${SDTD_DEFAULT_ACCELERATION:-none}}"
+  if [[ -n "${SDTD_ACCELERATION:-}" ]]; then
+    SDTD_RESOLVED_ACCELERATION="${SDTD_ACCELERATION}"
+  else
+    SDTD_RESOLVED_ACCELERATION="$(
+      cd "$(sdtd_bridge_root)" && source .venv/bin/activate && PRESET="${SDTD_RESOLVED_PRESET}" python - <<'PY'
+import os
+from streamdiffusion_td_bridge.config import PRESETS
+
+preset = PRESETS[os.environ["PRESET"]]
+print(preset.acceleration)
+PY
+    )"
+  fi
 }
 
 sdtd_load_preset_meta() {

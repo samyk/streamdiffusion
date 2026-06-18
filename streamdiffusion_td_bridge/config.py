@@ -10,14 +10,25 @@ _defaults = HAL_BRIDGE_LAUNCH_DEFAULTS
 
 Mode = Literal["passthrough", "img2img", "txt2img", "v2v"]
 Acceleration = Literal["none", "xformers", "tensorrt"]
-PipelineKind = Literal["streamdiffusion", "flux2_klein"]
+PipelineKind = Literal["streamdiffusion", "flux2_klein", "dit"]
+AttentionBackendName = Literal["auto", "flash", "sage", "xformers", "sdpa", "none"]
 
 FLUX2_KLEIN_4B = "black-forest-labs/FLUX.2-klein-4B"
 FLUX2_KLEIN_9B = "black-forest-labs/FLUX.2-klein-9B"
+SD35_MEDIUM = "stabilityai/stable-diffusion-3.5-medium"
+SD35_LARGE = "stabilityai/stable-diffusion-3.5-large"
 
 
 def is_flux_preset(*, pipeline: PipelineKind | str, name: str = "") -> bool:
     return pipeline == "flux2_klein" or name.startswith("flux2_klein")
+
+
+def is_dit_preset(*, pipeline: PipelineKind | str, name: str = "") -> bool:
+    return pipeline == "dit" or name.startswith("sd35_") or name.startswith("sd3_")
+
+
+def is_transformer_preset(*, pipeline: PipelineKind | str, name: str = "") -> bool:
+    return is_flux_preset(pipeline=pipeline, name=name) or is_dit_preset(pipeline=pipeline, name=name)
 
 
 @dataclass(frozen=True)
@@ -133,6 +144,48 @@ PRESETS: dict[str, ModelPreset] = {
         use_denoising_batch=False,
         warmup=2,
     ),
+    "sd35_medium_fast": ModelPreset(
+        name="sd35_medium_fast",
+        model_id_or_path=SD35_MEDIUM,
+        t_index_list=[1, 2, 3, 4],
+        mode="img2img",
+        pipeline="dit",
+        acceleration="none",
+        frame_buffer_size=1,
+        use_lcm_lora=False,
+        use_tiny_vae=False,
+        cfg_type="none",
+        use_denoising_batch=False,
+        warmup=2,
+    ),
+    "sd35_medium_quality": ModelPreset(
+        name="sd35_medium_quality",
+        model_id_or_path=SD35_MEDIUM,
+        t_index_list=[1, 2, 3, 4, 5, 6],
+        mode="img2img",
+        pipeline="dit",
+        acceleration="none",
+        frame_buffer_size=1,
+        use_lcm_lora=False,
+        use_tiny_vae=False,
+        cfg_type="none",
+        use_denoising_batch=False,
+        warmup=3,
+    ),
+    "sd35_large_fast": ModelPreset(
+        name="sd35_large_fast",
+        model_id_or_path=SD35_LARGE,
+        t_index_list=[1, 2, 3, 4],
+        mode="img2img",
+        pipeline="dit",
+        acceleration="none",
+        frame_buffer_size=1,
+        use_lcm_lora=False,
+        use_tiny_vae=False,
+        cfg_type="none",
+        use_denoising_batch=False,
+        warmup=2,
+    ),
 }
 
 
@@ -157,8 +210,11 @@ class BridgeConfig:
     video_backend: Literal["ndi", "mock"] = "ndi"
     drop_stale_frames: bool = True
     acceleration: Acceleration | None = _defaults["acceleration"]
+    attention_backend: AttentionBackendName | str = _defaults["attention_backend"]
     frame_buffer_size: int | None = _defaults["frame_buffer_size"]
     flux_transformer_engine: bool = _defaults["flux_transformer_engine"]
+    modelopt_enabled: bool = _defaults["modelopt_enabled"]
+    modelopt_checkpoint: str | None = _defaults["modelopt_checkpoint"]
     upscale_enabled: bool = _defaults["upscale_enabled"]
     upscale_factor: int = _defaults["upscale_factor"]
     upscale_method: Literal["bicubic", "realesrgan", "maxine-vsr"] = _defaults["upscale_method"]
@@ -173,10 +229,11 @@ class BridgeConfig:
         return preset.frame_buffer_size if preset else 1
 
     def effective_acceleration(self) -> str:
-        if self.acceleration is not None:
-            return self.acceleration
+        from .accel import resolve_acceleration
+
         preset = PRESETS.get(self.preset)
-        return preset.acceleration if preset else "tensorrt"
+        preset_default = preset.acceleration if preset else "tensorrt"
+        return resolve_acceleration(self.acceleration, preset_default)
 
     def output_resolution(self) -> tuple[int, int]:
         if self.upscale_enabled:
@@ -196,6 +253,11 @@ class BridgeConfig:
             flux_engine = "on (Blackwell bfloat16 + torch.compile)"
         else:
             flux_engine = "off (float16 eager)"
+
+        attention = self.attention_backend
+        modelopt = "on" if self.modelopt_enabled else "off"
+        if self.modelopt_checkpoint:
+            modelopt = f"on ({self.modelopt_checkpoint})"
 
         if self.upscale_enabled:
             upscale = f"on x{self.upscale_factor} ({self.upscale_method}"
@@ -220,6 +282,8 @@ class BridgeConfig:
             f"  frame_buffer_size:   {frame_buffer} ({frame_buffer_src})",
             f"  flux_transformer:    {flux_engine}",
             f"  acceleration:        {acceleration}",
+            f"  attention backend:   {attention}",
+            f"  modelopt:            {modelopt}",
             f"  upscale:             {upscale}",
             f"  video backend:       {self.video_backend}",
             f"  NDI in:              {self.input_name}",
