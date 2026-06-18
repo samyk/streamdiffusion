@@ -1,13 +1,11 @@
 # StreamDiffusion ↔ TouchDesigner (NDI)
 
-Real-time img2img / v2v on a Linux GPU box (**hal**). TouchDesigner sends camera video over NDI and controls everything from **`hal_control`** — no CLI needed during performance.
-
 Run real-time StreamDiffusion with video input + prompts on a networked Linux
 machine while controlling it remotely from TouchDesigner (Mac/Windows) live.
 
 960x540 cam diffusion receives **27 FPS @ 1920x1080** w/SD Turbo Quality model +
-2x video upscaling (1920x1080) via maxine-vsr on NVIDIA RTX Pro 6000 Blackwell
-running on same network.
+2x video upscaling via maxine-vsr on NVIDIA RTX Pro 6000 Blackwell, video input
+and Touch running on MacBook Pro M1 running on smae network.
 
 Video is sent and received over NDI, and controls are sent over WebSocket or
 the Daydream-style REST API.
