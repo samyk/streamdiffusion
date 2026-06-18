@@ -294,5 +294,6 @@ HAL_SYNC_PARSCOPE = (
     "Upscaleenabled Upscalefactor Upscalemethod Upscalehalf "
     "Upscalemaxinequality Upscalemodel "
     "Filterthreshold Filterskip Pausestream "
+    "Segmentenabled Persononly Cutbackground Segmentfeather Backgroundcolor Segmentbackend "
     "Ipimagepath Ipscale Ipmodel Controlnetmodel Controlnetscale Pushall"
 )

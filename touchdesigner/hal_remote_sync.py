@@ -3,14 +3,41 @@ import urllib.error
 import urllib.request
 
 CONTROL_PATH = "/project1/hal_control"
+SYNC_DAT_PATH = "/project1/hal_remote_sync"
 REMOTE_HOST = "192.168.0.90"
 REMOTE_PORT = 8780
 STREAM_ID = "remote-1"
 
 _last_payload = None
 _last_prompt = None
-_last_push_at = 0.0
-_push_debounce_s = 0.35
+_push_debounce_ms = 350
+_push_run = None
+
+
+def _sync_dat():
+    return op(SYNC_DAT_PATH)
+
+
+def schedule_push(force=False):
+    """Trailing-edge debounce: coalesce rapid slider edits into one PATCH."""
+    global _push_run
+    if force:
+        push_params(force=True)
+        return
+    sync = _sync_dat()
+    if sync is None:
+        push_params(force=True)
+        return
+    if _push_run is not None:
+        try:
+            _push_run.kill()
+        except Exception:
+            pass
+    _push_run = run(
+        f"op('{SYNC_DAT_PATH}').module.push_params(force=True)",
+        delayMilliSeconds=_push_debounce_ms,
+        fromOP=sync,
+    )
 
 
 def _control():
@@ -212,20 +239,13 @@ def build_params():
 
 
 def push_params(force=False):
-    global _last_payload, _last_push_at
-    import time
-
-    now = time.monotonic()
-    if not force and now - _last_push_at < _push_debounce_s:
-        return
-
+    global _last_payload
     params = build_params()
     payload = {"pipeline": "streamdiffusion", "params": params}
     encoded = json.dumps(payload, sort_keys=True)
     if not force and encoded == _last_payload:
         return
     _last_payload = encoded
-    _last_push_at = now
 
     url = f"{_base_url()}/v1/streams/{_stream_id()}"
     request = urllib.request.Request(
@@ -292,13 +312,13 @@ def onValueChange(par, prev):
         "backgroundcolor",
     )
     if any(token in par.name.lower() for token in tokens):
-        push_params()
+        schedule_push()
     return
 
 
 def onPulse(par):
     if par.name in ("Pushall", "Startstream"):
-        push_params(force=True)
+        schedule_push(force=True)
     return
 
 

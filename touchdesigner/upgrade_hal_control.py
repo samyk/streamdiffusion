@@ -25,6 +25,7 @@ importlib.reload(hal_control_defs)
 
 from hal_control_defs import (
     HAL_CONTROL_PAGE,
+    HAL_SYNC_PARSCOPE,
     TD_HAL_DEFAULTS,
     ATTENTION_BACKEND_LABELS,
     ATTENTION_BACKEND_NAMES,
@@ -233,9 +234,20 @@ sync_body = sync_body.replace(
     'CONTROL_PATH = "/project1/hal_control"',
     f'CONTROL_PATH = "{profile.hal_control}"',
 )
+sync_body = sync_body.replace(
+    'SYNC_DAT_PATH = "/project1/hal_remote_sync"',
+    f'SYNC_DAT_PATH = "{profile.sync_dat}"',
+)
 sync_body = sync_body.replace("REMOTE_PORT = 8780", f"REMOTE_PORT = {profile.daydream_port}")
 sync_body = sync_body.replace('STREAM_ID = "remote-1"', f'STREAM_ID = "{profile.stream_id}"')
 sync_dat.text = sync_body
+
+parexec = op(profile.parexec)
+if parexec is not None:
+    parexec.par.pars = HAL_SYNC_PARSCOPE
+    parexec.par.file = sync_dat.path
+    parexec.par.valuechange = True
+    parexec.par.onpulse = True
 
 # --- Rebuild UI container (panel inside /project1/hal_control_ui) ---
 exec(

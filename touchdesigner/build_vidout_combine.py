@@ -271,6 +271,10 @@ if sync_dat is not None:
         'CONTROL_PATH = "/project1/hal_control"',
         f'CONTROL_PATH = "{profile.hal_control}"',
     )
+    sync_body = sync_body.replace(
+        'SYNC_DAT_PATH = "/project1/hal_remote_sync"',
+        f'SYNC_DAT_PATH = "{profile.sync_dat}"',
+    )
     sync_body = sync_body.replace("REMOTE_PORT = 8780", f"REMOTE_PORT = {profile.daydream_port}")
     sync_body = sync_body.replace(
         'STREAM_ID = "remote-1"',
