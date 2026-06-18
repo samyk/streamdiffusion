@@ -7,6 +7,8 @@ machine while controlling it remotely from TouchDesigner (Mac/Windows) live.
 2x video upscaling via maxine-vsr on NVIDIA RTX Pro 6000 Blackwell, video input
 and Touch running on MacBook Pro M1 running on smae network.
 
+https://github.com/user-attachments/assets/6873a297-e2fb-4bc6-a787-74b4f754001c
+
 Video is sent and received over NDI, and controls are sent over WebSocket or
 the Daydream-style REST API.
 
