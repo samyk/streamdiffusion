@@ -22,6 +22,8 @@ Post-processing:
 - **Real-ESRGAN** — sharper, slower (`realesrgan`)
 - **Bicubic** — fastest (`bicubic`)
 
+![StreamDiffusion TouchDesigner Controls](other/halbase.jpg)
+
 ## TouchDesigner setup
 
 You can use `toe/sdremote1.toe` out the gate.
