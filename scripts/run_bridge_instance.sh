@@ -35,6 +35,7 @@ UPSCALE_HALF="${SDTD_RESOLVED_UPSCALE_HALF}"
 UPSCALE_MAXINE_QUALITY="${SDTD_RESOLVED_UPSCALE_MAXINE_QUALITY}"
 FRAME_BUFFER_SIZE="${SDTD_RESOLVED_FRAME_BUFFER_SIZE}"
 FLUX_TRANSFORMER_ENGINE="${SDTD_RESOLVED_FLUX_TRANSFORMER_ENGINE}"
+ATTENTION_BACKEND="${SDTD_RESOLVED_ATTENTION_BACKEND}"
 
 if [[ "${INSTANCE}" == "a" || "${INSTANCE}" == "A" ]]; then
   systemctl --user stop sdtd-bridge.service 2>/dev/null || true
@@ -48,6 +49,7 @@ sdtd_print_settings "${INSTANCE}" "${PROMPT}"
 
 RUN_CMD="cd '${ROOT}' && source .venv/bin/activate && source scripts/env_cuda.sh && exec sdtd-bridge \
   --acceleration ${SDTD_RESOLVED_ACCELERATION} \
+  --attention-backend ${ATTENTION_BACKEND} \
   --preset ${PRESET} \
   --input-name ${INPUT_NAME} \
   --output-name ${OUTPUT_NAME} \

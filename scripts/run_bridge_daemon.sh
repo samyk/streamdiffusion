@@ -33,6 +33,7 @@ stop_bridge() {
 bridge_args() {
   echo \
     --acceleration "${SDTD_RESOLVED_ACCELERATION}" \
+    --attention-backend "${SDTD_RESOLVED_ATTENTION_BACKEND}" \
     --preset "${SDTD_RESOLVED_PRESET}" \
     --input-name "${SDTD_RESOLVED_INPUT_NAME}" \
     --output-name "${SDTD_RESOLVED_OUTPUT_NAME}" \

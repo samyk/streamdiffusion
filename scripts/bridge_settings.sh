@@ -114,6 +114,7 @@ sdtd_resolve_instance() {
   SDTD_RESOLVED_UPSCALE_MAXINE_QUALITY="${SDTD_UPSCALE_MAXINE_QUALITY:-${SDTD_DEFAULT_UPSCALE_MAXINE_QUALITY:-high}}"
   SDTD_RESOLVED_FRAME_BUFFER_SIZE="${SDTD_FRAME_BUFFER_SIZE:-${SDTD_DEFAULT_FRAME_BUFFER_SIZE:-}}"
   SDTD_RESOLVED_FLUX_TRANSFORMER_ENGINE="${SDTD_FLUX_TRANSFORMER_ENGINE:-${SDTD_DEFAULT_FLUX_TRANSFORMER_ENGINE:-1}}"
+  SDTD_RESOLVED_ATTENTION_BACKEND="${SDTD_ATTENTION_BACKEND:-${SDTD_DEFAULT_ATTENTION_BACKEND:-auto}}"
   if [[ -n "${SDTD_ACCELERATION:-}" ]]; then
     SDTD_RESOLVED_ACCELERATION="${SDTD_ACCELERATION}"
   else
@@ -228,6 +229,7 @@ sdtd_print_settings() {
   echo "  frame_buffer_size:   ${effective_frame_buffer} (${frame_buffer_note})"
   echo "  flux_transformer:    ${flux_engine_label}"
   echo "  acceleration:        ${SDTD_RESOLVED_ACCELERATION}"
+  echo "  attention backend:   ${SDTD_RESOLVED_ATTENTION_BACKEND}"
   echo "  upscale:             ${upscale_label}"
   echo "  NDI in:              ${SDTD_RESOLVED_INPUT_NAME}"
   echo "  NDI out:             ${SDTD_RESOLVED_OUTPUT_NAME}"
