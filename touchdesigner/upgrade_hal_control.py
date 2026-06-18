@@ -24,7 +24,7 @@ import hal_control_defs
 importlib.reload(hal_control_defs)
 
 from hal_control_defs import (
-    HAL_CONTROL_PARSCOPE,
+    HAL_CONTROL_PAGE,
     TD_HAL_DEFAULTS,
     UPSCALE_FACTOR_LABELS,
     UPSCALE_FACTOR_NAMES,
@@ -35,16 +35,19 @@ from hal_control_defs import (
     apply_td_hal_defaults,
 )
 from instances import get_instance
+from td_layout import apply_layout
 
 profile = get_instance(INSTANCE)
 SYNC_PATH = f"{REPO}/hal_remote_sync.py"
-LAYOUT_PATH = f"{REPO}/vidout_combine_layout.py"
 ctrl = op(profile.hal_control)
 if ctrl is None:
     raise RuntimeError(f"Missing {profile.hal_control}. Run build_hal_control.py first.")
 
 
 def _page(name: str):
+    for page in ctrl.customPages:
+        if page.name == HAL_CONTROL_PAGE:
+            return page
     for page in ctrl.customPages:
         if page.name == name:
             return page
@@ -206,63 +209,15 @@ sync_body = sync_body.replace("REMOTE_PORT = 8780", f"REMOTE_PORT = {profile.day
 sync_body = sync_body.replace('STREAM_ID = "remote-1"', f'STREAM_ID = "{profile.stream_id}"')
 sync_dat.text = sync_body
 
-# --- Refresh combine layout DAT + per-frame hook ---
-layout_dat = op(f"{profile.vidout}/combine_layout")
-if layout_dat is not None:
-    layout_dat.text = open(LAYOUT_PATH, encoding="utf-8").read()
-
-exec_dat = op(profile.layout_exec)
-if exec_dat is not None:
-    exec_dat.par.active = True
-    exec_dat.par.start = True
-    exec_dat.par.framestart = True
-    if layout_dat is not None:
-        exec_dat.par.file = layout_dat.path
-    exec_dat.text = (
-        "def onFrameStart(frame):\n"
-        f"    op('{profile.vidout}/combine_layout').module.update_layout('{profile.vidout}')\n"
-        "    return\n"
+# --- Rebuild UI container (panel inside /project1/hal_control_ui) ---
+exec(
+    compile(
+        f'INSTANCE = "{INSTANCE}"\n'
+        + open(f"{REPO}/build_hal_control_ui.py", encoding="utf-8").read(),
+        f"{REPO}/build_hal_control_ui.py",
+        "exec",
     )
-
-# --- Rebuild floating UI ---
-existing_ui = op(profile.hal_control_ui)
-if existing_ui:
-    existing_ui.destroy()
-
-ui = op("/project1").create("parameterCOMP", f"hal_control_ui{profile.suffix}")
-ui.nodeX = 500 if profile.key == "a" else 1100
-ui.nodeY = 200
-ui.par.op = ctrl.path
-ui.par.header = True
-ui.par.custom = True
-ui.par.builtin = False
-ui.par.pagescope = "*"
-ui.par.parscope = HAL_CONTROL_PARSCOPE
-ui.par.allowexpand = True
-ui.par.inputeditor = True
-ui.par.labels = True
-ui.par.separators = True
-ui.par.compress = True
-ui.par.pvscrollbar = True
-ui.par.phscrollbar = False
-ui.par.crop = False
-ui.par.fit = False
-ui.par.spacing = 2
-ui.par.marginl = 8
-ui.par.marginr = 8
-ui.par.margint = 6
-ui.par.marginb = 6
-ui.par.w = 520
-ui.par.h = 820
-ui.par.hmode = "fixed"
-ui.par.vmode = "fixed"
-ui.par.fixedaspect = False
-ui.par.bgcolorr = 0.1
-ui.par.bgcolorg = 0.11
-ui.par.bgcolorb = 0.14
-ui.par.bgalpha = 1
-ui.par.display = True
-ui.par.enable = True
+)
 
 # --- Ensure HUD nodes + refresh layout wiring ---
 exec(
@@ -274,4 +229,9 @@ exec(
 )
 
 sync_dat.module.push_params(force=True)
+placed = apply_layout(profile)
+ui = op(profile.hal_control_ui)
 print(f"Upgraded {ctrl.path} + {ui.path} (instance {profile.label}).")
+if ui:
+    print(f"  UI: click {ui.path} in /project1")
+print(f"  restored {placed} saved node positions from network_layout.py")

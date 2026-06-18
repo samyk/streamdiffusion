@@ -105,6 +105,7 @@ import sys
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 from instances import get_instance
+from td_layout import apply_layout, apply_project_layout
 
 profile = get_instance(INSTANCE)
 
@@ -131,6 +132,7 @@ _run("build_ndi_video_path.py")
 _run("build_vidout_combine.py")
 _run("build_hal_control_ui.py")
 
+placed = apply_layout(profile) + apply_project_layout()
 print(
     f"Instance {profile.label} ready (TD_LAYOUT={TD_LAYOUT}):\n"
     f"  NDI send:    {profile.ndi_out}\n"
@@ -139,5 +141,6 @@ print(
     f"  UI:          {profile.hal_control_ui}\n"
     f"  Preview:     {profile.preview}\n"
     f"  HAL screen:  {profile.screen_session}\n"
+    f"  restored:    {placed} node positions from network_layout.py\n"
     f"  Rule: only ONE TD project may control {profile.stream_id} on :{profile.daydream_port}"
 )

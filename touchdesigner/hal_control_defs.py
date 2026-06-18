@@ -186,7 +186,10 @@ def apply_td_hal_defaults(ctrl, *, include_connection: bool = False) -> None:
         getattr(ctrl.par, name).val = value
 
 
-# Full floating-panel parscope (order = UI layout).
+# Single scrollable parameter page (sections via appendHeader in build_hal_control).
+HAL_CONTROL_PAGE = "HAL"
+
+# Legacy explicit parscope order (unused when UI uses pagescope=HAL + parscope=*).
 HAL_CONTROL_PARSCOPE = (
     "Remotehost Remoteport Streamid Pushall "
     "Prompt Negativeprompt Prompt2 Prompt2weight Promptinterp "

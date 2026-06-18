@@ -218,21 +218,7 @@ def push_params(force=False):
         print(f"[hal_remote_sync] PATCH failed: {exc}")
 
 
-def _update_combine_layout():
-    ctrl = _control()
-    if ctrl is None:
-        return
-    suffix = "_b" if ctrl.path.endswith("_b") else ""
-    layout = op(f"/project1/vidout{suffix}/combine_layout")
-    if layout is not None:
-        layout.module.update_layout(f"/project1/vidout{suffix}")
-
-
 def onValueChange(par, prev):
-    if par.name in ("Pipscale", "Textscale", "Textlift"):
-        _update_combine_layout()
-        return
-
     if par.name == "Prompt":
         global _last_prompt
         ctrl = _control()

@@ -1,6 +1,6 @@
 """
-Configure vidout/combine layout:
-  in1 (hal) fullscreen | in2 (source) PiP flush bottom-right | text above bottom
+Configure vidout/combine layout (expression-driven, no per-frame layout script):
+  in1 (hal) fullscreen | in2 (source) PiP flush bottom-right | prompt + FPS HUD
 
 Run in TD textport:
 
@@ -18,15 +18,21 @@ REPO = "/Users/samy/c/touch/samysd/touchdesigner"
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 from instances import get_instance
+from td_layout import apply_layout, place
 
 profile = get_instance(INSTANCE)
 
 VIDOUT_PATH = profile.vidout
 COMBINE_PATH = profile.combine
-EXEC_PATH = profile.layout_exec
-LAYOUT_PATH = f"{REPO}/vidout_combine_layout.py"
+SYNC_PATH = profile.sync_dat
 HAL_CONTROL_PATH = profile.hal_control
 VIDIN_OUT_PATH = f"{profile.vidin}/out1"
+
+INFO_PATH = f"{VIDOUT_PATH}/info1"
+INFO_FPS_CHANNEL = "receive_fps"
+TEXT_FONT_BASE = 28.0
+FPS_FONT_BASE = 22.0
+FPS_MARGIN_PX = 16
 
 VIDOUT = op(VIDOUT_PATH)
 COMBINE = op(COMBINE_PATH)
@@ -42,9 +48,19 @@ def _recreate(comp, name: str, op_type: str):
     return comp.create(op_type, name)
 
 
-def _place(node, x: int, y: int) -> None:
-    node.nodeX = x
-    node.nodeY = y
+def _hal() -> str:
+    return f"op('{HAL_CONTROL_PATH}')"
+
+
+def _set_expr(target, par_name: str, expression: str) -> None:
+    par = getattr(target.par, par_name)
+    par.expr = expression
+
+
+def _set_const(target, par_name: str, value) -> None:
+    par = getattr(target.par, par_name)
+    par.expr = ""
+    par.val = value
 
 
 in1 = COMBINE.op("in1")
@@ -52,8 +68,8 @@ in2 = COMBINE.op("in2")
 if in1 is None or in2 is None:
     raise RuntimeError("combine needs in1, in2")
 
-_place(in1, -600, 200)
-_place(in2, -400, 200)
+place(in1)
+place(in2)
 
 ndiin2 = VIDOUT.op("ndiin2")
 vidout_in1 = VIDOUT.op("in1")
@@ -64,10 +80,29 @@ if vidout_in1 is not None and vidin_out is not None:
     vidout_in1.inputConnectors[0].connect(vidin_out)
     COMBINE.inputConnectors[1].connect(vidout_in1)
 
-for old_name in ("pip_xform",):
+for old_name in ("pip_xform", "text2", "text3", "text4"):
     old = COMBINE.op(old_name)
     if old:
         old.destroy()
+
+for old_name in ("combine_layout", "combine_layout_exec", "fps_timer", "fps_chop_exec"):
+    old = VIDOUT.op(old_name)
+    if old:
+        old.destroy()
+
+info1 = VIDOUT.op("info1")
+if info1 is None or info1.OPType != "infoCHOP":
+    if info1:
+        info1.destroy()
+    info1 = VIDOUT.create("infoCHOP", "info1")
+if ndiin2 is not None:
+    info1.par.op = ndiin2
+if hasattr(info1.par, "infotype"):
+    _set_const(info1, "infotype", "all")
+if hasattr(info1.par, "iscope"):
+    _set_const(info1, "iscope", "*")
+_set_const(info1, "passive", False)
+place(info1)
 
 pip_resize = COMBINE.op("pip_resize")
 if pip_resize is None or pip_resize.OPType != "fitTOP":
@@ -75,97 +110,115 @@ if pip_resize is None or pip_resize.OPType != "fitTOP":
         pip_resize.destroy()
     pip_resize = COMBINE.create("fitTOP", "pip_resize")
 pip_resize.inputConnectors[0].connect(in2)
-pip_resize.par.outputresolution = "custom"
-pip_resize.par.fit = "fitbest"
-pip_resize.par.resolutionw = 192
-pip_resize.par.resolutionh = 108
-_place(pip_resize, -500, 200)
+_set_const(pip_resize, "outputresolution", "custom")
+_set_const(pip_resize, "fit", "fitbest")
+_set_expr(pip_resize, "resolutionw", f"max(1, int(op('in2').width * {_hal()}.par.Pipscale))")
+_set_expr(pip_resize, "resolutionh", f"max(1, int(op('in2').height * {_hal()}.par.Pipscale))")
+place(pip_resize)
 
 pip_place = COMBINE.op("pip_place")
 if pip_place is None:
     pip_place = COMBINE.create("transformTOP", "pip_place")
 pip_place.inputConnectors[0].connect(pip_resize)
-pip_place.par.bgcolora = 0
-pip_place.par.px = 0
-pip_place.par.py = 0
-pip_place.par.punit = "fraction"
-pip_place.par.tunit = "pixels"
-pip_place.par.sx = 1
-pip_place.par.sy = 1
-_place(pip_place, -350, 200)
+_set_const(pip_place, "bgcolora", 0)
+_set_const(pip_place, "px", 0)
+_set_const(pip_place, "py", 0)
+_set_const(pip_place, "punit", "fraction")
+_set_const(pip_place, "tunit", "pixels")
+_set_const(pip_place, "sx", 1)
+_set_const(pip_place, "sy", 1)
+place(pip_place)
 
 comp1 = _recreate(COMBINE, "comp1", "compositeTOP")
 comp1.inputConnectors[0].connect(pip_resize)
 comp1.inputConnectors[1].connect(in1)
-comp1.par.operand = "over"
-comp1.par.size = "input2"
-comp1.par.prefit = "nativeres"
-comp1.par.justifyh = "right"
-comp1.par.justifyv = "bottom"
-comp1.par.sx = 1
-comp1.par.sy = 1
-comp1.par.tx = 0
-comp1.par.ty = 0
-_place(comp1, -200, 200)
+_set_const(comp1, "operand", "over")
+_set_const(comp1, "size", "input2")
+_set_const(comp1, "prefit", "nativeres")
+_set_const(comp1, "justifyh", "right")
+_set_const(comp1, "justifyv", "bottom")
+_set_const(comp1, "sx", 1)
+_set_const(comp1, "sy", 1)
+_set_const(comp1, "tx", 0)
+_set_const(comp1, "ty", 0)
+place(comp1)
 
-prompt = "prompt"
-ctrl = op(HAL_CONTROL_PATH)
-if ctrl and hasattr(ctrl.par, "Prompt"):
-    prompt = ctrl.par.Prompt.eval().strip() or prompt
-
-for index, name in enumerate(("text2", "text3", "text4")):
-    _recreate(COMBINE, name, "textTOP")
-    text_top = COMBINE.op(name)
-    text_top.par.text = prompt
-    text_top.par.alignx = "center"
-    text_top.par.aligny = "bottom"
-    text_top.par.outputresolution = "custom"
-    text_top.par.wordwrap = True
-    text_top.par.fontautosize = "off"
-    text_top.par.fontcolorr = 1
-    text_top.par.fontcolorg = 1
-    text_top.par.fontcolorb = 1
-    text_top.par.keepfontratio = True
-    _place(text_top, 0 + index * 40, 0)
-
-text3 = COMBINE.op("text3")
+text_prompt = COMBINE.op("text_prompt")
+if text_prompt is None or text_prompt.OPType != "textTOP":
+    if text_prompt:
+        text_prompt.destroy()
+    text_prompt = COMBINE.create("textTOP", "text_prompt")
+_set_expr(text_prompt, "text", f"{_hal()}.par.Prompt")
+_set_const(text_prompt, "alignx", "center")
+_set_const(text_prompt, "aligny", "bottom")
+_set_const(text_prompt, "outputresolution", "custom")
+_set_const(text_prompt, "wordwrap", True)
+_set_const(text_prompt, "fontautosize", "off")
+_set_const(text_prompt, "fontsizexunit", "points")
+_set_const(text_prompt, "fontsizeyunit", "points")
+_set_const(text_prompt, "linespacingunit", "points")
+_set_const(text_prompt, "keepfontratio", True)
+_set_expr(text_prompt, "fontsizex", f"max(12, {TEXT_FONT_BASE} * {_hal()}.par.Textscale)")
+_set_expr(text_prompt, "fontsizey", f"max(12, {TEXT_FONT_BASE} * {_hal()}.par.Textscale)")
+_set_expr(text_prompt, "linespacing", f"max(2, {TEXT_FONT_BASE} * {_hal()}.par.Textscale * 0.12)")
+_set_expr(text_prompt, "resolutionw", "max(64, int(op('in1').width))")
+_set_expr(
+    text_prompt,
+    "resolutionh",
+    f"max(48, int({TEXT_FONT_BASE} * {_hal()}.par.Textscale * 3.5))",
+)
+_set_const(text_prompt, "fontcolorr", 1)
+_set_const(text_prompt, "fontcolorg", 1)
+_set_const(text_prompt, "fontcolorb", 1)
+place(text_prompt)
 
 comp2 = _recreate(COMBINE, "comp2", "compositeTOP")
-comp2.inputConnectors[0].connect(text3)
+comp2.inputConnectors[0].connect(text_prompt)
 comp2.inputConnectors[1].connect(comp1)
-comp2.par.operand = "over"
-comp2.par.size = "input2"
-comp2.par.prefit = "nativeres"
-comp2.par.justifyh = "center"
-comp2.par.justifyv = "bottom"
-comp2.par.px = 0.5
-comp2.par.py = 0
-comp2.par.tunit = "pixels"
-comp2.par.sx = 1
-comp2.par.sy = 1
-_place(comp2, 200, 200)
+_set_const(comp2, "operand", "over")
+_set_const(comp2, "size", "input2")
+_set_const(comp2, "prefit", "nativeres")
+_set_const(comp2, "justifyh", "center")
+_set_const(comp2, "justifyv", "bottom")
+_set_const(comp2, "px", 0.5)
+_set_const(comp2, "py", 0)
+_set_const(comp2, "tunit", "pixels")
+_set_const(comp2, "sx", 1)
+_set_const(comp2, "sy", 1)
+_set_expr(comp2, "ty", f"{_hal()}.par.Textlift")
+place(comp2)
 
 finull = COMBINE.op("finull")
 if finull is None:
     finull = COMBINE.create("nullTOP", "finull")
 finull.inputConnectors[0].connect(comp2)
-_place(finull, 400, 200)
+place(finull)
 
 text_fps = COMBINE.op("text_fps")
 if text_fps is None or text_fps.OPType != "textTOP":
     if text_fps:
         text_fps.destroy()
     text_fps = COMBINE.create("textTOP", "text_fps")
-text_fps.par.text = "0"
-text_fps.par.alignx = "left"
-text_fps.par.aligny = "bottom"
-text_fps.par.outputresolution = "custom"
-text_fps.par.fontautosize = "off"
-text_fps.par.fontcolorr = 1
-text_fps.par.fontcolorg = 1
-text_fps.par.fontcolorb = 1
-text_fps.par.keepfontratio = True
-_place(text_fps, 320, 200)
+_set_expr(
+    text_fps,
+    "text",
+    f"str(int(max(0, op('../info1')['{INFO_FPS_CHANNEL}'])))",
+)
+_set_const(text_fps, "alignx", "left")
+_set_const(text_fps, "aligny", "center")
+_set_const(text_fps, "outputresolution", "custom")
+_set_const(text_fps, "fontautosize", "off")
+_set_const(text_fps, "fontsizexunit", "points")
+_set_const(text_fps, "fontsizeyunit", "points")
+_set_const(text_fps, "keepfontratio", True)
+_set_const(text_fps, "fontsizex", FPS_FONT_BASE)
+_set_const(text_fps, "fontsizey", FPS_FONT_BASE)
+_set_const(text_fps, "resolutionw", max(48, int(FPS_FONT_BASE * 2.2)))
+_set_const(text_fps, "resolutionh", max(40, int(FPS_FONT_BASE * 1.6)))
+_set_const(text_fps, "fontcolorr", 1)
+_set_const(text_fps, "fontcolorg", 1)
+_set_const(text_fps, "fontcolorb", 1)
+place(text_fps)
 
 fps_xform = COMBINE.op("fps_xform")
 if fps_xform is None or fps_xform.OPType != "transformTOP":
@@ -173,14 +226,14 @@ if fps_xform is None or fps_xform.OPType != "transformTOP":
         fps_xform.destroy()
     fps_xform = COMBINE.create("transformTOP", "fps_xform")
 fps_xform.inputConnectors[0].connect(text_fps)
-fps_xform.par.bgcolora = 0
-fps_xform.par.px = 16
-fps_xform.par.py = 16
-fps_xform.par.punit = "pixels"
-fps_xform.par.tunit = "pixels"
-fps_xform.par.sx = 1
-fps_xform.par.sy = 1
-_place(fps_xform, 410, 200)
+_set_const(fps_xform, "bgcolora", 0)
+_set_const(fps_xform, "px", FPS_MARGIN_PX)
+_set_const(fps_xform, "py", FPS_MARGIN_PX)
+_set_const(fps_xform, "punit", "pixels")
+_set_const(fps_xform, "tunit", "pixels")
+_set_const(fps_xform, "sx", 1)
+_set_const(fps_xform, "sy", 1)
+place(fps_xform)
 
 comp_hud = COMBINE.op("comp_hud")
 if comp_hud is None or comp_hud.OPType != "compositeTOP":
@@ -189,44 +242,19 @@ if comp_hud is None or comp_hud.OPType != "compositeTOP":
     comp_hud = COMBINE.create("compositeTOP", "comp_hud")
 comp_hud.inputConnectors[0].connect(fps_xform)
 comp_hud.inputConnectors[1].connect(finull)
-comp_hud.par.operand = "over"
-comp_hud.par.size = "input2"
-comp_hud.par.prefit = "nativeres"
-comp_hud.par.justifyh = "left"
-comp_hud.par.justifyv = "bottom"
-comp_hud.par.tx = 0
-comp_hud.par.ty = 0
-comp_hud.par.prefit = "nativeres"
-_place(comp_hud, 500, 200)
+_set_const(comp_hud, "operand", "over")
+_set_const(comp_hud, "size", "input2")
+_set_const(comp_hud, "prefit", "nativeres")
+_set_const(comp_hud, "justifyh", "left")
+_set_const(comp_hud, "justifyv", "bottom")
+_set_const(comp_hud, "tx", 0)
+_set_const(comp_hud, "ty", 0)
+place(comp_hud)
 
 out1 = COMBINE.op("out1")
 if out1 is not None:
     out1.inputConnectors[0].connect(comp_hud)
-    _place(out1, 600, 200)
-
-layout_dat = VIDOUT.op("combine_layout")
-if layout_dat is None:
-    layout_dat = VIDOUT.create("textDAT", "combine_layout")
-layout_dat.text = open(LAYOUT_PATH, encoding="utf-8").read()
-_place(layout_dat, -600, 0)
-
-old_exec = op(EXEC_PATH)
-if old_exec and old_exec.parent != VIDOUT:
-    old_exec.destroy()
-
-exec_dat = VIDOUT.op("combine_layout_exec")
-if exec_dat is None:
-    exec_dat = VIDOUT.create("executeDAT", "combine_layout_exec")
-exec_dat.par.active = True
-exec_dat.par.start = True
-exec_dat.par.framestart = True
-exec_dat.par.file = layout_dat.path
-exec_dat.text = (
-    "def onFrameStart(frame):\n"
-    f"    op('{layout_dat.path}').module.update_layout('{VIDOUT_PATH}')\n"
-    "    return\n"
-)
-_place(exec_dat, -400, 0)
+    place(out1)
 
 combine_parexec = VIDOUT.op("combine_parexec")
 if combine_parexec:
@@ -236,7 +264,7 @@ vidout_ui = op(f"/project1/vidout_ui{profile.suffix}")
 if vidout_ui:
     vidout_ui.destroy()
 
-sync_dat = op(profile.sync_dat)
+sync_dat = op(SYNC_PATH)
 if sync_dat is not None:
     sync_body = open(f"{REPO}/hal_remote_sync.py", encoding="utf-8").read()
     sync_body = sync_body.replace(
@@ -250,6 +278,8 @@ if sync_dat is not None:
     )
     sync_dat.text = sync_body
 
-op(layout_dat.path).module.update_layout(VIDOUT_PATH)
-
-print(f"vidout/combine layout updated (instance {profile.label}).")
+placed = apply_layout(profile)
+print(f"vidout/combine wired with expressions (instance {profile.label}).")
+print(f"  restored {placed} saved node positions from network_layout.py")
+print("  No per-frame layout script — edit Text TOP colors directly in the network.")
+print(f"  FPS: op('../info1')['{INFO_FPS_CHANNEL}'] → text_fps")

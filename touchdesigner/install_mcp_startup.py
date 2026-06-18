@@ -9,6 +9,12 @@ Then save your .toe and set it as TD Default Project (Preferences → General �
 """
 
 import os
+import sys
+
+REPO = "/Users/samy/c/touch/samysd/touchdesigner"
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+from td_layout import apply_project_layout, place
 
 MCP_ROOT = "/Users/samy/c/touch/touchmcp"
 MCP_TOX = os.path.join(MCP_ROOT, "mcp_webserver_base.tox")
@@ -42,8 +48,7 @@ parent = op("/project1")
 exec_dat = parent.op("mcp_startup_exec")
 if exec_dat is None:
     exec_dat = parent.create("executeDAT", "mcp_startup_exec")
-    exec_dat.nodeX = -600
-    exec_dat.nodeY = 400
+place(exec_dat)
 exec_dat.par.active = True
 exec_dat.par.start = True
 exec_dat.text = f'''\
@@ -62,4 +67,5 @@ def onStart():
 print("MCP pinned.")
 print(f"  externaltox -> {MCP_TOX}")
 print(f"  webserver active at {ws.path}")
+print(f"  restored {apply_project_layout()} project node positions from network_layout.py")
 print("Save this .toe, then set TD Preferences → General → Default Project.")

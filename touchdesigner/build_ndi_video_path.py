@@ -25,6 +25,7 @@ REPO = "/Users/samy/c/touch/samysd/touchdesigner"
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 from instances import get_instance
+from td_layout import apply_layout, place
 
 profile = get_instance(INSTANCE)
 
@@ -110,6 +111,7 @@ if vidin is None or vidout is None:
 
 # --- Send path (vidin) ---
 ndiout = _ensure(vidin, "ndiout1", "ndioutTOP")
+place(ndiout)
 ndiout.par.active = True
 ndiout.par.name = NDI_OUT_NAME
 _deactivate_duplicate_ndi_senders(VIDIN_PATH, NDI_OUT_NAME)
@@ -132,15 +134,27 @@ else:
     send_source = f"{ndiout.inputs[0].path} -> {ndiout.path}"
 
 vidin_out = _ensure(vidin, "out1", "outTOP")
+place(vidin_out)
 if not vidin_out.inputs or vidin_out.inputs[0] is None:
     source = ndiout.inputs[0] if ndiout.inputs and ndiout.inputs[0] else ndiout
     vidin_out.inputConnectors[0].connect(source)
 
 # --- Return path (vidout) ---
 ndiin_hal = _ensure(vidout, "ndiin2", "ndiinTOP")
+place(ndiin_hal)
 _bind_ndi_in_exact(ndiin_hal, NDI_IN_NAME, HAL_HOST)
 
+info1 = _ensure(vidout, "info1", "infoCHOP")
+place(info1)
+info1.par.op = ndiin_hal
+if hasattr(info1.par, "infotype"):
+    info1.par.infotype = "all"
+if hasattr(info1.par, "iscope"):
+    info1.par.iscope = "*"
+info1.par.passive = False
+
 vidout_in = _ensure(vidout, "in1", "inTOP")
+place(vidout_in)
 _connect_if_free(vidout_in, vidin_out)
 
 combine = vidout.op("combine")
@@ -150,9 +164,11 @@ if combine is not None:
         combine_in.inputConnectors[0].connect(ndiin_hal)
 
 vidout_out = _ensure(vidout, "out1", "outTOP")
+place(vidout_out)
 preview = PROJECT.op(PREVIEW_NAME)
 if preview is None:
     preview = PROJECT.create("nullTOP", PREVIEW_NAME)
+place(preview)
 if not preview.inputs or preview.inputs[0] is None:
     preview.inputConnectors[0].connect(vidout_out)
 
@@ -162,9 +178,12 @@ if combine is not None:
     if combine_out is not None:
         display_sink = f"{combine.path} -> {vidout_out.path}"
 
+placed = apply_layout(profile)
 print(
     f"NDI wired (instance {profile.label}):\n"
     f"  send:    {send_source} ({NDI_OUT_NAME})\n"
     f"  return:  {ndiin_hal.path} ({ndiin_hal.par.name}, extraips={HAL_HOST})\n"
-    f"  display: {display_sink} -> {preview.path}"
+    f"  fps:     {info1.path} -> {ndiin_hal.path}\n"
+    f"  display: {display_sink} -> {preview.path}\n"
+    f"  restored {placed} saved node positions from network_layout.py"
 )

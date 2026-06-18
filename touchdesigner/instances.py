@@ -23,6 +23,10 @@ class InstanceProfile:
     pidfile: str
 
     @property
+    def hal_control_ui_panel(self) -> str:
+        return self.hal_control_ui
+
+    @property
     def vidin(self) -> str:
         return f"/project1/vidin{self.suffix}"
 

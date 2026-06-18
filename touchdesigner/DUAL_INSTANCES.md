@@ -15,7 +15,7 @@ Run two independent pipelines in parallel: two TouchDesigner projects (or one TD
 | TD vidin | `/project1/vidin` | `/project1/vidin_b` |
 | TD vidout | `/project1/vidout` | `/project1/vidout_b` |
 | TD control | `/project1/hal_control` | `/project1/hal_control_b` |
-| TD UI panel | `/project1/hal_control_ui` | `/project1/hal_control_ui_b` |
+| TD UI | `/project1/hal_control_ui` | `/project1/hal_control_ui_b` |
 | TD preview | `/project1/null1` | `/project1/null1_b` |
 
 ## HAL — start both bridges
@@ -74,7 +74,7 @@ exec(open("/Users/samy/c/touch/samysd/touchdesigner/build_instance.py", encoding
 
 **Wire your camera/source** into each project's `vidin` (or `vidin_b`) separately.
 
-**Open UI:** drag `/project1/hal_control_ui` (or `hal_control_ui_b`) into a Panel pane.
+**Use UI:** click `/project1/hal_control_ui` in the network (Display is on — panel shows when selected).
 
 ## Two TDs on one Mac
 
