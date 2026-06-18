@@ -5,7 +5,7 @@ machine while controlling it remotely from TouchDesigner (Mac/Windows) live.
 
 960x540 cam diffusion receives **27 FPS @ 1920x1080** w/SD Turbo Quality model +
 2x video upscaling via maxine-vsr on NVIDIA RTX Pro 6000 Blackwell, video input
-and Touch running on MacBook Pro M1 running on smae network.
+and Touch running on MacBook Pro M1 running on same network.
 
 https://github.com/user-attachments/assets/6873a297-e2fb-4bc6-a787-74b4f754001c
 
