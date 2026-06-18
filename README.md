@@ -1,4 +1,4 @@
-# StreamDiffusion ↔ TouchDesigner (NDI)
+# High-Speed StreamDiffusion ↔ TouchDesigner (NDI)
 
 Run real-time StreamDiffusion with video input + prompts on a networked Linux
 machine while controlling it remotely from TouchDesigner (Mac/Windows) live.
@@ -10,17 +10,19 @@ and Touch running on MacBook Pro M1 running on smae network.
 Video is sent and received over NDI, and controls are sent over WebSocket or
 the Daydream-style REST API.
 
-Supported inference paths:
+Features:
 
-- **StreamDiffusion** — SD Turbo / SDXL Turbo / LCM-LoRA (default stack)
-- **FLUX.2 Klein** — optional `Flux2KleinPipeline` path (4B / 9B)
-- **Passthrough** — NDI loopback for network validation
-
-Post-processing:
-
-- **NVIDIA Maxine VSR** — default GPU upscale (`maxine-vsr`)
-- **Real-ESRGAN** — sharper, slower (`realesrgan`)
-- **Bicubic** — fastest (`bicubic`)
+- **Prompting** — main + negative + blended second prompt
+- **Models** - SD Turbo / SDXL Turbo / LCM-LoRA / FLUX Klein / SD3.5 / custom
+- **V2V** — temporal img2img (turbo) or DiT-based person segmentation (all pipelines)
+- **LoRA** — up to 3 simultaneous LoRAs (SD Turbo / SDXL Turbo only)
+- **ControlNet** — optional ControlNet conditioning (SD Turbo / SDXL Turbo only)
+- **Upscaling** — GPU upscaling NVIDIA Maxine VSR, Real-ESRGAN and Bicubic
+- **IP-Adapter** — optional IP-Adapter conditioning (SD Turbo / SDXL Turbo only)
+- **Person Segmentation** — GPU-accelerated CUDA DeepLab on Blackwell for person masks, with feathering and background cutout options
+- **Attention backend** — multiple options including TensorRT and xformers for turbo, flash/sage/xformers/sdpa for FLUX.2 Klein and SD3.5 DiT
+- **Acceleration** — TensorRT / xformers for SD Turbo / SDXL Turbo; attention backend for FLUX.2 Klein and SD3.5 DiT
+- **Denoising** — multiple steps for flexible strength control (turbo) or DiT-based quality control (all pipelines)
 
 ![StreamDiffusion TouchDesigner Controls](other/halbase.jpg)
 
