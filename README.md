@@ -34,24 +34,10 @@ You can use `toe/sdremote1.toe` out the gate.
 - Adjust vidin for video input.
 - Control all features from `hal_control`, or use "View" on `hal_control_ui`
 
-### Alternatively adding to existing TouchDesigner setup
-
-**Build control UI** (once, or after repo updates):
-
-```python
-exec(open("/Users/samy/c/touch/samysd/touchdesigner/build_hal_control.py", encoding="utf-8").read())
-```
-
-**Upgrade existing UI** (add new params without destroying the COMP):
-
-```python
-exec(open("/Users/samy/c/touch/samysd/touchdesigner/upgrade_hal_control.py", encoding="utf-8").read())
-```
-
-**On hal** — start the bridge (once per session):
+**On Linux host** — start the bridge (once per session):
 
 ```bash
-./scripts/run_bridge_screen.sh "optional initial prompt"
+./scripts/run_bridge_screen.sh ["optional initial prompt"]
 ```
 
 Changes in `hal_control` sync automatically (~350ms debounce). Use **Push All** to force a full sync.
@@ -171,11 +157,11 @@ Everything below lives on **`hal_control`** unless noted.
 
 Custom checkpoint: set **Modelid** to a HuggingFace id or local `.safetensors` path.
 
-**HF licenses required:** FLUX.2 Klein, SD3.5 Medium/Large.
+**HF (free) licenses required if using these models:** FLUX.2 Klein, SD3.5 Medium/Large.
 
 ---
 
-## Hal setup (once)
+## Linux setup (once)
 
 Blackwell / CUDA 13.2:
 
@@ -190,7 +176,7 @@ Blackwell / CUDA 13.2:
 ./scripts/install_segmentation_deps.sh      # person mask optional
 ```
 
-Deploy code changes from Mac:
+Deploy code changes from remote host:
 
 ```bash
 ./scripts/sync_to_hal.sh
