@@ -31,11 +31,11 @@ This creates `/project1/streamdiffusion_bridge` with:
 | Bridge Host / Port | WebSocket target (`hal:8765`) |
 | Push All | sends full state once |
 
-**Video path (project level):** `webcam_in` → `webcam_flip` → `ndiout1` → hal → `ndiin1` → `out1`
+**Video path (project level):** `vidin/in1` → `ndiout1` → hal → `ndiin1` → `out1`
 
 The bridge COMP is **control-only** (WebSocket). NDI lives at `/project1` level to avoid duplicate senders.
 
-1. Wire your source TOP into `webcam_in` (or replace webcam)
+1. Wire your source TOP into `vidin/in1`
 2. Set `Bridgehost` to your Linux box IP/hostname
 3. Start bridge on hal: `sdtd-bridge --acceleration tensorrt --preset sd_turbo_fast`
 4. Pulse **Push All** on first connect

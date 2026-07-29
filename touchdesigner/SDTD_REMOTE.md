@@ -48,7 +48,7 @@ exec(open("/Users/samy/c/touch/samysd/touchdesigner/build_sdtd_remote_backend.py
 3. Wire video (if not already):
 
 ```
-webcam_flip → ndiout1 (td_streamdiffusion_in)
+vidin/in1 → ndiout1 (td_streamdiffusion_in)
 ndiin1 (streamdiffusion_out) → out1
 ```
 

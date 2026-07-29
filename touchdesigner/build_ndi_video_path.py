@@ -20,12 +20,24 @@ except NameError:
     INSTANCE = "a"
 
 import sys
+import importlib
 
 REPO = "/Users/samy/c/touch/samysd/touchdesigner"
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
+
+# TD textport keeps imported modules alive — always reload build deps from disk.
+for _mod in ("td_build_utils", "build_scene_idle_ndi"):
+    sys.modules.pop(_mod, None)
+
+import build_scene_idle_ndi as _scene_idle_mod
+
+importlib.reload(_scene_idle_mod)
 from instances import get_instance
 from td_layout import apply_layout, place
+
+wire_scene_idle_ndi = _scene_idle_mod.wire_scene_idle_ndi
+validate_scene_idle = _scene_idle_mod.validate_scene_idle
 
 profile = get_instance(INSTANCE)
 
@@ -110,28 +122,23 @@ if vidin is None or vidout is None:
     )
 
 # --- Send path (vidin) ---
+in1 = _ensure(vidin, "in1", "inTOP")
+place(in1)
+
 ndiout = _ensure(vidin, "ndiout1", "ndioutTOP")
 place(ndiout)
-ndiout.par.active = True
 ndiout.par.name = NDI_OUT_NAME
 _deactivate_duplicate_ndi_senders(VIDIN_PATH, NDI_OUT_NAME)
 
 if not ndiout.inputs or ndiout.inputs[0] is None:
-    flip = vidin.op("webcam_flip")
-    cam = vidin.op("base2")
-    if cam is None:
-        cam = vidin.op("webcam_in")
-    if flip is not None and cam is not None:
-        _connect_if_free(flip, cam.op("out1") if cam.OPType == "baseCOMP" else cam)
-        _connect_if_free(ndiout, flip)
-        send_source = f"{cam.path} -> {flip.path} -> {ndiout.path}"
-    elif cam is not None:
-        _connect_if_free(ndiout, cam)
-        send_source = f"{cam.path} -> {ndiout.path}"
-    else:
-        send_source = f"(wire a source into {ndiout.path})"
+    ndiout.inputConnectors[0].connect(in1)
+    send_source = f"(wire camera/source into {in1.path}) -> {ndiout.path}"
 else:
     send_source = f"{ndiout.inputs[0].path} -> {ndiout.path}"
+
+# TD-native scene idle gate (TOP/CHOP + expressions).
+wire_scene_idle_ndi(vidin, hal_control=profile.hal_control)
+validate_scene_idle(vidin, hal_control=profile.hal_control)
 
 vidin_out = _ensure(vidin, "out1", "outTOP")
 place(vidin_out)

@@ -11,6 +11,9 @@ try:
 except NameError:
     INSTANCE = "a"
 
+# Set True to force UI + vidout rebuild (slow; don't paste repeatedly with this on).
+FORCE_FULL = False
+
 import sys
 
 REPO = "/Users/samy/c/touch/samysd/touchdesigner"
@@ -19,11 +22,11 @@ if REPO not in sys.path:
 
 import importlib
 
-import hal_control_defs
+import td_hal_defs
 
-importlib.reload(hal_control_defs)
+importlib.reload(td_hal_defs)
 
-from hal_control_defs import (
+from td_hal_defs import (
     HAL_CONTROL_PAGE,
     HAL_SYNC_PARSCOPE,
     TD_HAL_DEFAULTS,
@@ -31,6 +34,8 @@ from hal_control_defs import (
     ATTENTION_BACKEND_NAMES,
     PRESET_MENU_LABELS,
     PRESET_MENU_NAMES,
+    SCENE_IDLE_MODE_LABELS,
+    SCENE_IDLE_MODE_NAMES,
     SEGMENTATION_BACKEND_LABELS,
     SEGMENTATION_BACKEND_NAMES,
     UPSCALE_FACTOR_LABELS,
@@ -39,7 +44,6 @@ from hal_control_defs import (
     UPSCALE_MAXINE_QUALITY_NAMES,
     UPSCALE_METHOD_LABELS,
     UPSCALE_METHOD_NAMES,
-    apply_td_hal_defaults,
 )
 from instances import get_instance
 from td_layout import apply_layout
@@ -50,58 +54,131 @@ ctrl = op(profile.hal_control)
 if ctrl is None:
     raise RuntimeError(f"Missing {profile.hal_control}. Run build_hal_control.py first.")
 
+PROMPT_WIDGET = "/project1/prompt/textprompt"
+PROMPT_EXPR = f"op('{PROMPT_WIDGET}').par.text"
 
-def _page(name: str):
+
+def _repair_prompt_expr() -> None:
+    """Fix broken Prompt bindings to the prompt textCOMP (common typo: .par.textpp)."""
+    if not hasattr(ctrl.par, "Prompt"):
+        return
+    widget = op(PROMPT_WIDGET)
+    if widget is None:
+        return
+    par = ctrl.par.Prompt
+    expr = par.expr or ""
+    if "textpp" in expr or (expr and "textprompt" in expr and expr.strip() != PROMPT_EXPR):
+        par.expr = PROMPT_EXPR
+    ctrl.cook(force=True)
+    err = ctrl.errors()
+    if err:
+        raise RuntimeError(f"{ctrl.path} Prompt repair failed: {err}")
+
+# Second run is params-only: skip UI/vidout rebuild (those caused textport freezes).
+_LIGHT = (
+    not FORCE_FULL
+    and hasattr(ctrl.par, "Sceneidle")
+    and hasattr(ctrl.par, "Scenechangethreshold")
+)
+
+parexec = op(profile.parexec)
+sync_dat = op(profile.sync_dat)
+if sync_dat is None:
+    raise RuntimeError(f"Missing {profile.sync_dat}")
+
+if parexec is not None:
+    parexec.par.active = False
+    parexec.par.valuechange = False
+
+try:
+    sync_dat.module.set_sync_muted(True)
+except Exception:
+    pass
+
+
+def _hal_page():
     for page in ctrl.customPages:
         if page.name == HAL_CONTROL_PAGE:
             return page
-    for page in ctrl.customPages:
-        if page.name == name:
-            return page
-    return ctrl.appendCustomPage(name)
+    return ctrl.appendCustomPage(HAL_CONTROL_PAGE)
+
+
+def _page(name: str):
+    # Single-page HAL layout: all sections live on HAL_CONTROL_PAGE.
+    return _hal_page()
+
+
+def _is_menu(par) -> bool:
+    try:
+        return bool(par.isMenu)
+    except Exception:
+        return False
 
 
 def _ensure_toggle(page, name: str, label: str, default: bool) -> None:
     if hasattr(ctrl.par, name):
         return
     page.appendToggle(name, label=label)
-    setattr(ctrl.par, name, default)
+    getattr(ctrl.par, name).val = int(bool(default))
 
 
 def _ensure_menu(page, name: str, label: str, names, labels, default: str) -> None:
     if hasattr(ctrl.par, name):
         par = getattr(ctrl.par, name)
+        if not _is_menu(par):
+            print(f"[upgrade_hal_control] skip {name}: exists but is not a menu")
+            return
         par.menuNames = names
         par.menuLabels = labels
+        par.label = label
         return
     page.appendMenu(name, label=label)
     par = getattr(ctrl.par, name)
     par.menuNames = names
     par.menuLabels = labels
-    setattr(ctrl.par, name, default)
+    par.val = default
 
 
 def _ensure_str(page, name: str, label: str, default: str = "") -> None:
     if hasattr(ctrl.par, name):
         return
     page.appendStr(name, label=label)
-    setattr(ctrl.par, name, default)
+    getattr(ctrl.par, name).val = default
 
 
 def _ensure_int(page, name: str, label: str, default: int, norm_min: int, norm_max: int) -> None:
     if hasattr(ctrl.par, name):
         return
-    par = page.appendInt(name, label=label)
+    page.appendInt(name, label=label)
+    par = getattr(ctrl.par, name)
     par.normMin = norm_min
     par.normMax = norm_max
-    setattr(ctrl.par, name, default)
+    par.val = default
 
 
-def _ensure_float(page, name: str, label: str, default: float) -> None:
+def _ensure_float(
+    page,
+    name: str,
+    label: str,
+    default: float,
+    *,
+    norm_min: float | None = None,
+    norm_max: float | None = None,
+) -> None:
     if hasattr(ctrl.par, name):
+        par = getattr(ctrl.par, name)
+        if norm_min is not None:
+            par.normMin = norm_min
+        if norm_max is not None:
+            par.normMax = norm_max
         return
     page.appendFloat(name, label=label)
-    setattr(ctrl.par, name, default)
+    par = getattr(ctrl.par, name)
+    if norm_min is not None:
+        par.normMin = norm_min
+    if norm_max is not None:
+        par.normMax = norm_max
+    par.val = default
 
 
 # --- Upscale (hal-only before this upgrade) ---
@@ -163,6 +240,28 @@ _ensure_toggle(
 )
 
 advanced = _page("Advanced")
+_ensure_menu(
+    advanced,
+    "Sceneidle",
+    "Scene Idle (skip static input)",
+    SCENE_IDLE_MODE_NAMES,
+    SCENE_IDLE_MODE_LABELS,
+    TD_HAL_DEFAULTS["Sceneidle"],
+)
+_ensure_float(
+    advanced,
+    "Scenechangethreshold",
+    "Min Scene Change (0.02-0.08 noisy cam)",
+    float(TD_HAL_DEFAULTS["Scenechangethreshold"]),
+    norm_min=0.0,
+    norm_max=0.25,
+)
+_ensure_toggle(
+    advanced,
+    "Sceneidlendi",
+    "Also gate NDI send from TouchDesigner",
+    bool(TD_HAL_DEFAULTS["Sceneidlendi"]),
+)
 _ensure_str(advanced, "Ipmodel", "IP-Adapter Model (HF id)", "h94/IP-Adapter")
 
 display = _page("Display")
@@ -218,16 +317,9 @@ for name, label in (
         if hasattr(getattr(ctrl.par, name), "normMax"):
             getattr(ctrl.par, name).normMax = 49
 
-apply_td_hal_defaults(ctrl)
-
-ctrl.par.Remotehost = profile.hal_host
-ctrl.par.Remoteport = profile.daydream_port
-ctrl.par.Streamid = profile.stream_id
-
-# --- Refresh sync DAT from repo ---
-sync_dat = op(profile.sync_dat)
-if sync_dat is None:
-    raise RuntimeError(f"Missing {profile.sync_dat}")
+ctrl.par.Remotehost.val = profile.hal_host
+ctrl.par.Remoteport.val = profile.daydream_port
+ctrl.par.Streamid.val = profile.stream_id
 
 sync_body = open(SYNC_PATH, encoding="utf-8").read()
 sync_body = sync_body.replace(
@@ -240,38 +332,58 @@ sync_body = sync_body.replace(
 )
 sync_body = sync_body.replace("REMOTE_PORT = 8780", f"REMOTE_PORT = {profile.daydream_port}")
 sync_body = sync_body.replace('STREAM_ID = "remote-1"', f'STREAM_ID = "{profile.stream_id}"')
-sync_dat.text = sync_body
+if sync_dat.text != sync_body:
+    sync_dat.text = sync_body
 
-parexec = op(profile.parexec)
 if parexec is not None:
     parexec.par.pars = HAL_SYNC_PARSCOPE
     parexec.par.file = sync_dat.path
-    parexec.par.valuechange = True
     parexec.par.onpulse = True
 
-# --- Rebuild UI container (panel inside /project1/hal_control_ui) ---
-exec(
-    compile(
-        f'INSTANCE = "{INSTANCE}"\n'
-        + open(f"{REPO}/build_hal_control_ui.py", encoding="utf-8").read(),
-        f"{REPO}/build_hal_control_ui.py",
-        "exec",
-    )
-)
+if not _LIGHT:
+    try:
+        exec(
+            compile(
+                f'INSTANCE = "{INSTANCE}"\n'
+                + open(f"{REPO}/build_hal_control_ui.py", encoding="utf-8").read(),
+                f"{REPO}/build_hal_control_ui.py",
+                "exec",
+            )
+        )
+    except Exception as exc:
+        print(f"[upgrade_hal_control] UI rebuild skipped: {exc}")
 
-# --- Ensure HUD nodes + refresh layout wiring ---
-exec(
-    compile(
-        f'INSTANCE = "{INSTANCE}"\n' + open(f"{REPO}/build_vidout_combine.py", encoding="utf-8").read(),
-        f"{REPO}/build_vidout_combine.py",
-        "exec",
-    )
-)
+    try:
+        exec(
+            compile(
+                f'INSTANCE = "{INSTANCE}"\n'
+                + open(f"{REPO}/build_vidout_combine.py", encoding="utf-8").read(),
+                f"{REPO}/build_vidout_combine.py",
+                "exec",
+            )
+        )
+    except Exception as exc:
+        print(f"[upgrade_hal_control] vidout combine skipped: {exc}")
+else:
+    print("[upgrade_hal_control] light upgrade (params + sync only; UI/vidout unchanged)")
 
-sync_dat.module.push_params(force=True)
+try:
+    sync_dat.module.cancel_pending_push()
+    sync_dat.module.set_sync_muted(False)
+    sync_dat.module.push_params(force=True)
+except Exception as exc:
+    print(f"[upgrade_hal_control] push_params failed: {exc}")
+
+_repair_prompt_expr()
+
+if parexec is not None:
+    parexec.par.valuechange = True
+    parexec.par.active = True
+
 placed = apply_layout(profile)
 ui = op(profile.hal_control_ui)
-print(f"Upgraded {ctrl.path} + {ui.path} (instance {profile.label}).")
+mode = "light" if _LIGHT else "full"
+print(f"Upgraded {ctrl.path} ({mode}, instance {profile.label}).")
 if ui:
     print(f"  UI: click {ui.path} in /project1")
 print(f"  restored {placed} saved node positions from network_layout.py")

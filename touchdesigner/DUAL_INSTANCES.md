@@ -112,6 +112,8 @@ Fix:
 3. Re-run `build_instance.py` on both projects after changing layout
 4. Only one `vidin` should publish `td_streamdiffusion_in` (check NDI Studio)
 
+Wire each instance's camera into `vidin/in1` (or `vidin_b/in1`).
+
 Also verify `vidout/ndiin2` is `HAL (streamdiffusion_out)` — not `_out_b`.
 
 ## VRAM note

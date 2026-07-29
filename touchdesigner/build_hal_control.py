@@ -32,8 +32,8 @@ from td_hal_defs import (
     PRESET_MENU_NAMES,
     SEGMENTATION_BACKEND_LABELS,
     SEGMENTATION_BACKEND_NAMES,
-    SEGMENTATION_BACKEND_LABELS,
-    SEGMENTATION_BACKEND_NAMES,
+    SCENE_IDLE_MODE_LABELS,
+    SCENE_IDLE_MODE_NAMES,
     UPSCALE_FACTOR_LABELS,
     UPSCALE_FACTOR_NAMES,
     UPSCALE_MAXINE_QUALITY_LABELS,
@@ -255,6 +255,17 @@ ctrl.par.Filterthreshold = TD_HAL_DEFAULTS["Filterthreshold"]
 _start_section("Filterthreshold")
 pg.appendInt("Filterskip", label="Similar Filter Max Skip")
 ctrl.par.Filterskip = TD_HAL_DEFAULTS["Filterskip"]
+scene_idle = pg.appendMenu("Sceneidle", label="Scene Idle (skip static input)")
+scene_idle.menuNames = SCENE_IDLE_MODE_NAMES
+scene_idle.menuLabels = SCENE_IDLE_MODE_LABELS
+ctrl.par.Sceneidle = TD_HAL_DEFAULTS["Sceneidle"]
+_start_section("Sceneidle")
+change = pg.appendFloat("Scenechangethreshold", label="Min Scene Change (0.02-0.08 noisy cam)")
+change.normMin = 0.0
+change.normMax = 0.25
+ctrl.par.Scenechangethreshold = TD_HAL_DEFAULTS["Scenechangethreshold"]
+pg.appendToggle("Sceneidlendi", label="Also gate NDI send from TouchDesigner")
+ctrl.par.Sceneidlendi.val = int(bool(TD_HAL_DEFAULTS["Sceneidlendi"]))
 pg.appendToggle("Pausestream", label="Pause / Passthrough")
 ctrl.par.Pausestream = False
 pg.appendStr("Ipimagepath", label="IP-Adapter Image Path (TRT only)")

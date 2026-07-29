@@ -12,6 +12,26 @@ _last_payload = None
 _last_prompt = None
 _push_debounce_ms = 350
 _push_run = None
+_sync_muted = False
+
+
+def cancel_pending_push() -> None:
+    """Kill any trailing-edge PATCH timer (e.g. before bulk param edits)."""
+    global _push_run
+    if _push_run is not None:
+        try:
+            _push_run.kill()
+        except Exception:
+            pass
+        _push_run = None
+
+
+def set_sync_muted(muted: bool) -> None:
+    """Suppress parexec-driven PATCHes during bulk upgrades."""
+    global _sync_muted
+    _sync_muted = bool(muted)
+    if muted:
+        cancel_pending_push()
 
 
 def _sync_dat():
@@ -21,6 +41,8 @@ def _sync_dat():
 def schedule_push(force=False):
     """Trailing-edge debounce: coalesce rapid slider edits into one PATCH."""
     global _push_run
+    if _sync_muted and not force:
+        return
     if force:
         push_params(force=True)
         return
@@ -180,6 +202,15 @@ def build_params():
         "enable_similar_image_filter": float(ctrl.par.Filterthreshold) > 0.0,
         "similar_image_filter_threshold": float(ctrl.par.Filterthreshold),
         "similar_image_filter_max_skip_frame": int(ctrl.par.Filterskip),
+        "scene_idle_mode": ctrl.par.Sceneidle.eval()
+        if hasattr(ctrl.par, "Sceneidle")
+        else "off",
+        "scene_change_threshold": float(ctrl.par.Scenechangethreshold)
+        if hasattr(ctrl.par, "Scenechangethreshold")
+        else 0.015,
+        "scene_idle_ndi_gate": bool(int(ctrl.par.Sceneidlendi))
+        if hasattr(ctrl.par, "Sceneidlendi")
+        else True,
         "paused": bool(int(ctrl.par.Pausestream)) if hasattr(ctrl.par, "Pausestream") else False,
         "prompt_interpolation_method": ctrl.par.Promptinterp.eval()
         if hasattr(ctrl.par, "Promptinterp")
@@ -269,6 +300,8 @@ def push_params(force=False):
 
 
 def onValueChange(par, prev):
+    if _sync_muted:
+        return
     if par.name == "Prompt":
         global _last_prompt
         ctrl = _control()
@@ -298,6 +331,9 @@ def onValueChange(par, prev):
         "fluxtransformer",
         "modelopt",
         "filter",
+        "sceneidle",
+        "scenechange",
+        "sceneidlendi",
         "pause",
         "lora",
         "tinyvae",
@@ -325,5 +361,7 @@ def onPulse(par):
 
 
 def onStart():
+    if _sync_muted:
+        return
     push_params(force=True)
     return

@@ -63,6 +63,13 @@ ATTENTION_BACKEND_LABELS = [
     "None (eager)",
 ]
 
+SCENE_IDLE_MODE_NAMES = ["off", "promptwake", "strict"]
+SCENE_IDLE_MODE_LABELS = [
+    "Off",
+    "Skip static (prompt/seed wake)",
+    "Skip static (ignore prompt/seed)",
+]
+
 FLUX_KLEIN_PRESETS = {
     "flux2_klein_fast",
     "flux2_klein_quality",
@@ -240,6 +247,9 @@ TD_HAL_DEFAULTS = {
     "Textlift": 36,
     "Filterthreshold": _bridge_get("similar_image_filter_threshold", 0.0),
     "Filterskip": _bridge_get("similar_image_filter_max_skip_frame", 10),
+    "Sceneidle": _bridge_get("scene_idle_mode", "off"),
+    "Scenechangethreshold": _bridge_get("scene_change_threshold", 0.015),
+    "Sceneidlendi": _bridge_get("scene_idle_ndi_gate", True),
     "Pausestream": False,
     "Segmentenabled": _bridge_get("segmentation_enabled", False),
     "Persononly": _bridge_get("person_only", False),
@@ -260,7 +270,17 @@ def apply_td_hal_defaults(ctrl, *, include_connection: bool = False) -> None:
             continue
         if not hasattr(ctrl.par, name):
             continue
-        getattr(ctrl.par, name).val = value
+        par = getattr(ctrl.par, name)
+        try:
+            if par.isToggle:
+                par.val = int(bool(value))
+            else:
+                par.val = value
+        except Exception:
+            try:
+                setattr(ctrl.par, name, value)
+            except Exception as exc:
+                print(f"[hal_control_defs] could not set {name}: {exc}")
 
 
 # Single scrollable parameter page (sections via appendHeader in build_hal_control).
@@ -279,7 +299,7 @@ HAL_CONTROL_PARSCOPE = (
     "Upscaleenabled Upscalefactor Upscalemethod Upscalehalf "
     "Upscalemaxinequality Upscalemodel "
     "Pipscale Textscale Textlift "
-    "Filterthreshold Filterskip Pausestream "
+    "Filterthreshold Filterskip Sceneidle Scenechangethreshold Sceneidlendi Pausestream "
     "Segmentenabled Persononly Cutbackground Segmentfeather Backgroundcolor Segmentbackend "
     "Ipimagepath Ipscale Ipmodel Controlnetmodel Controlnetscale"
 )
@@ -295,7 +315,7 @@ HAL_SYNC_PARSCOPE = (
     "Lora1path Lora1scale Lora2path Lora2scale Lora3path Lora3scale "
     "Upscaleenabled Upscalefactor Upscalemethod Upscalehalf "
     "Upscalemaxinequality Upscalemodel "
-    "Filterthreshold Filterskip Pausestream "
+    "Filterthreshold Filterskip Sceneidle Scenechangethreshold Sceneidlendi Pausestream "
     "Segmentenabled Persononly Cutbackground Segmentfeather Backgroundcolor Segmentbackend "
     "Ipimagepath Ipscale Ipmodel Controlnetmodel Controlnetscale Pushall"
 )
