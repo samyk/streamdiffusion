@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image
 
 from .frames import VideoFrame
+from .image_utils import resize_rgb
 
 
 class VideoInput(Protocol):
@@ -19,13 +20,6 @@ class VideoInput(Protocol):
 class VideoOutput(Protocol):
     def write(self, frame: VideoFrame) -> None: ...
     def close(self) -> None: ...
-
-
-def resize_rgb(frame: np.ndarray, width: int, height: int) -> np.ndarray:
-    if frame.shape[0] == height and frame.shape[1] == width and frame.shape[2] == 3:
-        return np.ascontiguousarray(frame)
-    image = Image.fromarray(frame[:, :, :3], "RGB").resize((width, height), Image.Resampling.BILINEAR)
-    return np.ascontiguousarray(np.array(image, dtype=np.uint8))
 
 
 @dataclass
@@ -120,9 +114,11 @@ class NdiVideoInput:
         return [source for source in sources if _source_matches(self.source_name, source.ndi_name)]
 
     def _wait_for_source(self):
-        deadline = time.monotonic() + 20
+        deadline_env = __import__("os").environ.get("SDTD_NDI_WAIT_SEC", "0")
+        deadline = time.monotonic() + float(deadline_env) if float(deadline_env or 0) > 0 else None
         last_seen: list[str] = []
-        while time.monotonic() < deadline:
+        last_log = 0.0
+        while deadline is None or time.monotonic() < deadline:
             matches = self._find_matching_sources()
             last_seen = [source.ndi_name for source in matches]
             if matches:
@@ -132,6 +128,14 @@ class NdiVideoInput:
                 sources = self.ndi.find_get_current_sources(self.finder)
                 if sources:
                     return sources[0]
+            now = time.monotonic()
+            if now - last_log >= 5.0:
+                print(
+                    f"[ndi] waiting for {self.source_name!r} "
+                    f"(seen: {last_seen or 'none'})"
+                )
+                last_log = now
+            time.sleep(0.5)
         raise NdiError(f"NDI source {self.source_name!r} not found. Seen: {last_seen}")
 
     def _connect_source(self, source, *, initial: bool = False) -> None:
@@ -175,6 +179,21 @@ class NdiVideoInput:
         except Exception as exc:  # noqa: BLE001
             print(f"[ndi] reconnect refresh failed for {matches[0].ndi_name}: {exc}")
 
+    def _refresh_connection(self) -> None:
+        """Reconnect to the same stream label (handles TD restart / stale recv)."""
+        matches = self._find_matching_sources()
+        if not matches:
+            return
+        preferred = matches[0]
+        for candidate in matches:
+            if candidate.ndi_name == self._connected_ndi_name:
+                preferred = candidate
+                break
+        try:
+            self._connect_source(preferred)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ndi] refresh failed for {preferred.ndi_name}: {exc}")
+
     def set_resolution(self, width: int, height: int) -> None:
         self.width = width
         self.height = height
@@ -182,6 +201,8 @@ class NdiVideoInput:
     def read(self, timeout_ms: int = 1000) -> VideoFrame | None:
         frame_type, video, _audio, _metadata = self.ndi.recv_capture_v2(self.receiver, timeout_ms)
         if frame_type == self.ndi.FRAME_TYPE_NONE:
+            if self._last_frame_at and time.monotonic() - self._last_frame_at > self._stale_after_s:
+                self._refresh_connection()
             self._maybe_reconnect()
             return None
         if frame_type != self.ndi.FRAME_TYPE_VIDEO:
@@ -255,11 +276,19 @@ def make_video_io(
     output_name: str,
     width: int,
     height: int,
+    *,
+    frame_hub: WebFrameHub | None = None,
 ) -> tuple[VideoInput, VideoOutput]:
     if backend == "mock":
         return MockVideoInput(width, height), MockVideoOutput(output_name)
     if backend == "ndi":
         return NdiVideoInput(input_name, width, height), NdiVideoOutput(output_name)
+    if backend == "web":
+        from .web_io import WebVideoInput, WebVideoOutput
+
+        if frame_hub is None:
+            raise ValueError("web video backend requires frame_hub")
+        return WebVideoInput(frame_hub, width, height), WebVideoOutput(frame_hub, output_name)
     raise ValueError(f"Unsupported video backend: {backend}")
 
 

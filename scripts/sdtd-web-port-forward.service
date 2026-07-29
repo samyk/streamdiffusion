@@ -1,0 +1,13 @@
+[Unit]
+Description=Redirect stream.sa.my HTTPS (443) to sdtd mobile web (8790)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@REPO_ROOT@/scripts/setup_hal_web_port_forward.sh install
+ExecStop=@REPO_ROOT@/scripts/setup_hal_web_port_forward.sh remove
+
+[Install]
+WantedBy=multi-user.target

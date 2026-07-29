@@ -12,6 +12,7 @@ dependencies = [
   "numpy",
   "pillow",
   "websockets",
+  "aiohttp",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +51,9 @@ sdtd-touchdesigner-helper = "streamdiffusion_td_bridge.touchdesigner_helper:main
 
 [tool.setuptools.packages.find]
 include = ["streamdiffusion_td_bridge*"]
+
+[tool.setuptools.package-data]
+"streamdiffusion_td_bridge" = ["web/static/*"]
 
 [tool.ruff]
 line-length = 100

@@ -14,6 +14,7 @@ PATHS=("$@")
 if [[ ${#PATHS[@]} -eq 0 ]]; then
   PATHS=(
     scripts/
+    config/
     streamdiffusion_td_bridge/
     touchdesigner/
     README.md

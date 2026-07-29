@@ -5,6 +5,7 @@ import queue
 import signal
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from .config import PRESETS, BridgeConfig, RuntimeState
@@ -12,6 +13,9 @@ from .control_server import ControlServer
 from .daydream_api import DaydreamApiServer
 from .frames import LatestFrameQueue, SharedState
 from .ndi_io import make_video_io
+from .scene_idle import SceneIdleGate
+from .web_io import WebFrameHub
+from .web_server import MobileWebServer, load_prompts
 from .stream_worker import StreamWorker
 
 
@@ -26,6 +30,15 @@ class BridgeApp:
         self.state = SharedState(
             RuntimeState(preset=config.preset, width=config.width, height=config.height)
         )
+        self.scene_idle_gate = SceneIdleGate(
+            mode=config.scene_idle_mode,
+            threshold=config.scene_change_threshold,
+        )
+        self.frame_hub = (
+            WebFrameHub(jpeg_quality=config.web_jpeg_quality)
+            if config.video_backend == "web"
+            else None
+        )
         self.stop_event = threading.Event()
         self.worker = StreamWorker(
             config=config,
@@ -33,6 +46,7 @@ class BridgeApp:
             output_queue=self.output_queue,
             command_queue=self.command_queue,
             state=self.state,
+            scene_idle_gate=self.scene_idle_gate,
         )
         self.video_input = None
         self.video_output = None
@@ -46,6 +60,7 @@ class BridgeApp:
             self.config.output_name,
             self.config.width,
             self.config.height,
+            frame_hub=self.frame_hub,
         )
         self._start_thread("video-input", self._video_input_loop)
         self._start_thread("stream-worker", self.worker.run)
@@ -74,11 +89,37 @@ class BridgeApp:
             output_name=self.config.output_name,
         )
         daydream.start()
+        web_server: MobileWebServer | None = None
+        if self.config.web_port:
+            prompts_path = self.config.prompts_file
+            if prompts_path is None:
+                repo_prompts = Path.cwd() / ".prompts.txt"
+                prompts_path = str(repo_prompts) if repo_prompts.is_file() else None
+            assert self.frame_hub is not None
+            web_server = MobileWebServer(
+                self.config.web_host,
+                self.config.web_port,
+                frame_hub=self.frame_hub,
+                command_queue=self.command_queue,
+                state=self.state,
+                stream_id=self.config.stream_id,
+                infer_width=self.config.width,
+                infer_height=self.config.height,
+                prompts=load_prompts(prompts_path),
+                prompt_state_path=Path.cwd() / ".state" / "web_prompt.txt",
+                public_host=self.config.web_public_host,
+                public_port=self.config.web_public_port,
+                tls_cert=self.config.web_tls_cert,
+                tls_key=self.config.web_tls_key,
+            )
+            await web_server.start()
         server_task = asyncio.create_task(server.run())
         try:
             await self._wait_for_stop()
         finally:
             server_task.cancel()
+            if web_server is not None:
+                await web_server.stop()
             daydream.stop()
         self._close()
 
@@ -110,7 +151,10 @@ class BridgeApp:
             last_time = now
             if dt > 0:
                 self.state.update(fps_in=1.0 / dt)
-            self.input_queue.put(frame)
+            if self.scene_idle_gate.should_accept_frame(frame.data):
+                self.input_queue.put(frame)
+            else:
+                self.state.update(scene_idle=True, fps_out=0.0)
 
     def _video_output_loop(self) -> None:
         assert self.video_output is not None

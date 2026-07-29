@@ -207,7 +207,7 @@ class BridgeConfig:
     delta: float = _defaults["delta"]
     seed: int = _defaults["seed"]
     engine_dir: str = "engines"
-    video_backend: Literal["ndi", "mock"] = "ndi"
+    video_backend: Literal["ndi", "mock", "web"] = "ndi"
     drop_stale_frames: bool = True
     acceleration: Acceleration | None = _defaults["acceleration"]
     attention_backend: AttentionBackendName | str = _defaults["attention_backend"]
@@ -227,6 +227,17 @@ class BridgeConfig:
     segmentation_feather: float = _defaults["segmentation_feather"]
     background_color: str = _defaults["background_color"]
     segmentation_backend: str = _defaults["segmentation_backend"]
+    scene_idle_mode: str = _defaults["scene_idle_mode"]
+    scene_change_threshold: float = _defaults["scene_change_threshold"]
+    scene_idle_ndi_gate: bool = _defaults["scene_idle_ndi_gate"]
+    web_host: str = "0.0.0.0"
+    web_port: int | None = None
+    web_public_host: str | None = None
+    web_public_port: int | None = None
+    web_tls_cert: str | None = None
+    web_tls_key: str | None = None
+    prompts_file: str | None = None
+    web_jpeg_quality: int = 72
 
     def effective_frame_buffer_size(self) -> int:
         if self.frame_buffer_size is not None:
@@ -310,8 +321,24 @@ class BridgeConfig:
             f"  stream id:           {self.stream_id}",
             f"  REST API:            :{self.daydream_port}/v1/streams/{self.stream_id}",
             f"  WebSocket control:   :{self.control_port}/control",
-            "",
         ]
+        if self.web_port:
+            scheme = "https" if self.web_tls_cert else "http"
+            public_host = self.web_public_host or "<host>"
+            public_port = self.web_public_port or self.web_port
+            default_port = 443 if scheme == "https" else 80
+            if public_port == default_port:
+                public_url = f"{scheme}://{public_host}/"
+            else:
+                public_url = f"{scheme}://{public_host}:{public_port}/"
+            lines.extend(
+                [
+                    f"  mobile web UI:       {public_url}",
+                    f"  mobile bind:         {self.web_host}:{self.web_port}",
+                    f"  mobile video WS:     ws{'s' if self.web_tls_cert else ''}://{public_host}:{public_port}/ws",
+                ]
+            )
+        lines.append("")
         if preset_entry and preset_entry.t_index_list:
             lines.insert(7, f"  t_index_list:        {preset_entry.t_index_list}")
         print("\n".join(lines), flush=True)
@@ -338,6 +365,9 @@ class RuntimeState:
     loading: bool = False
     similar_image_filter_threshold: float = _defaults["similar_image_filter_threshold"]
     similar_image_filter_max_skip_frame: int = _defaults["similar_image_filter_max_skip_frame"]
+    scene_idle_mode: str = _defaults["scene_idle_mode"]
+    scene_change_threshold: float = _defaults["scene_change_threshold"]
+    scene_idle: bool = False
     width: int = _defaults["width"]
     height: int = _defaults["height"]
     extra: dict[str, Any] = field(default_factory=dict)
@@ -364,6 +394,9 @@ class RuntimeState:
             "last_error": self.last_error,
             "similar_image_filter_threshold": self.similar_image_filter_threshold,
             "similar_image_filter_max_skip_frame": self.similar_image_filter_max_skip_frame,
+            "scene_idle_mode": self.scene_idle_mode,
+            "scene_change_threshold": self.scene_change_threshold,
+            "scene_idle": self.scene_idle,
             "width": self.width,
             "height": self.height,
             "extra": self.extra,

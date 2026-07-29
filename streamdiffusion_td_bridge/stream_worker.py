@@ -31,6 +31,7 @@ from .deps import load_wrapper_class
 from .frames import LatestFrameQueue, SharedState, VideoFrame
 from .ndi_io import resize_rgb
 from .person_segmentation import PersonSegmenter, create_person_segmenter
+from .scene_idle import SceneIdleGate, normalize_scene_idle_mode
 from .upscaler import Upscaler, create_upscaler
 
 
@@ -42,6 +43,7 @@ class StreamWorker:
         output_queue: LatestFrameQueue,
         command_queue: "queue.Queue[dict[str, Any]]",
         state: SharedState,
+        scene_idle_gate: SceneIdleGate | None = None,
     ) -> None:
         self.config = config
         self.input_queue = input_queue
@@ -68,13 +70,14 @@ class StreamWorker:
         self._last_loaded_signature: tuple[Any, ...] | None = None
         self._pending_t_index: list[int] | None = None
         self._pending_t_index_at = 0.0
-        self._t_index_debounce_s = 0.2
+        self._t_index_debounce_s = 0.05
         self._ignored_td: set[tuple[str, str, str]] = set()
         self.upscaler: Upscaler | None = None
         self._upscaler_loaded = False
         self.segmenter: PersonSegmenter | None = None
         self._segmenter_loaded = False
         self._background_color = parse_background_color(config.background_color)
+        self.scene_idle_gate = scene_idle_gate
 
         self.state.mutate(self._sync_state)
 
@@ -124,6 +127,7 @@ class StreamWorker:
                         last_error=None,
                         latency_ms=latency_ms,
                         frame_count=state.frame_count + 1,
+                        scene_idle=False,
                     )
                 )
             except Exception as exc:  # keep the service alive during live shows
@@ -175,6 +179,7 @@ class StreamWorker:
             self.prompt_entries = [{"text": str(command.get("prompt", "")), "weight": 1.0}]
             self.prompt = self.prompt_entries[0]["text"]
             self._apply_prompt_embeddings()
+            self._maybe_wake_scene_idle()
             self.state.update(prompt=self.prompt)
             return
 
@@ -183,6 +188,7 @@ class StreamWorker:
             self.prompt_interpolation = str(command.get("interpolation", "average"))
             self.prompt = " | ".join(entry["text"] for entry in self.prompt_entries)
             self._apply_prompt_embeddings()
+            self._maybe_wake_scene_idle()
             self.state.update(prompt=self.prompt)
             return
 
@@ -251,6 +257,7 @@ class StreamWorker:
         if ctype == "set_seed":
             self.seed = int(command.get("seed", command.get("value", self.seed)))
             self._prepare_current_prompt()
+            self._maybe_wake_scene_idle()
             self.state.update(seed=self.seed)
             return
 
@@ -267,6 +274,25 @@ class StreamWorker:
                     stream.disable_similar_image_filter()
                 else:
                     stream.enable_similar_image_filter(threshold, max_skip)
+            return
+
+        if ctype == "set_scene_idle":
+            mode = normalize_scene_idle_mode(command.get("mode", command.get("scene_idle_mode")))
+            threshold = float(
+                command.get("threshold", command.get("scene_change_threshold", self.config.scene_change_threshold))
+            )
+            self.config.scene_idle_mode = mode
+            self.config.scene_change_threshold = max(0.0, min(1.0, threshold))
+            if "scene_idle_ndi_gate" in command:
+                self.config.scene_idle_ndi_gate = bool(command["scene_idle_ndi_gate"])
+            if self.scene_idle_gate is not None:
+                self.scene_idle_gate.configure(mode=mode, threshold=threshold)
+                self.scene_idle_gate.reset_reference()
+            self.state.update(
+                scene_idle_mode=mode,
+                scene_change_threshold=self.config.scene_change_threshold,
+                scene_idle=False,
+            )
             return
 
         if ctype == "set_mode":
@@ -1251,7 +1277,19 @@ class StreamWorker:
         extra["segmentation_feather"] = self.config.segmentation_feather
         extra["background_color"] = self.config.background_color
         extra["segmentation_runtime"] = self.segmenter.method if self.segmenter else "off"
+        extra["scene_idle_ndi_gate"] = self.config.scene_idle_ndi_gate
+        state.scene_idle_mode = self.config.scene_idle_mode
+        state.scene_change_threshold = self.config.scene_change_threshold
+        if self.scene_idle_gate is not None:
+            state.scene_idle = self.scene_idle_gate.idle
         state.extra = extra
+
+    def _maybe_wake_scene_idle(self) -> None:
+        if self.scene_idle_gate is None:
+            return
+        if self.config.scene_idle_mode != "respect_controls":
+            return
+        self.scene_idle_gate.request_force_process()
 
 
 def _set_many(obj, **values):  # noqa: ANN001, ANN003, ANN201

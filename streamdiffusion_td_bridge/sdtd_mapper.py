@@ -227,12 +227,16 @@ def daydream_params_to_commands(
     if _field_changed(params, previous, "t_index_list") and params.get("t_index_list"):
         denoise_cmd: dict[str, Any] = {
             "type": "set_denoise",
-            "steps": [int(v) for v in params["t_index_list"]],
+            "steps": [max(1, min(60, int(v))) for v in params["t_index_list"]],
         }
         preset = _resolve_preset(params)
         if preset:
             denoise_cmd["preset"] = preset
         commands.append(denoise_cmd)
+
+    if _field_changed(params, previous, "strength"):
+        strength = max(0.0, min(1.0, float(params["strength"])))
+        commands.append({"type": "set_denoise", "steps": [max(1, round(strength * 60))]})
 
     if _field_changed(params, previous, "guidance_scale"):
         preset = _resolve_preset(params) or str(
@@ -281,6 +285,24 @@ def daydream_params_to_commands(
             )
         else:
             commands.append({"type": "set_filter", "threshold": 0.0, "max_skip_frame": 10})
+
+    scene_idle_changed = any(
+        _field_changed(params, previous, key)
+        for key in (
+            "scene_idle_mode",
+            "scene_change_threshold",
+            "scene_idle_ndi_gate",
+        )
+    )
+    if scene_idle_changed:
+        commands.append(
+            {
+                "type": "set_scene_idle",
+                "mode": str(params.get("scene_idle_mode", "off")),
+                "threshold": float(params.get("scene_change_threshold", 0.015)),
+                "scene_idle_ndi_gate": bool(params.get("scene_idle_ndi_gate", True)),
+            }
+        )
 
     mode = str(params.get("sdmode", params.get("mode", "img2img")))
     if _field_changed(params, previous, "sdmode") or _field_changed(params, previous, "mode"):

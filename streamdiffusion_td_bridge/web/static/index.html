@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <title>StreamDiffusion Live</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div id="stage">
+      <img id="output" alt="StreamDiffusion output" />
+      <video id="camera" playsinline muted autoplay></video>
+      <canvas id="capture" aria-label="Sent camera frame preview"></canvas>
+    </div>
+
+    <div id="live-prompt"></div>
+    <div id="overlay">
+      <div id="status"></div>
+      <div id="live-prompt-inline"></div>
+      <div id="controls-row">
+        <div id="prompt-bar">
+          <button id="prev-prompt" type="button" aria-label="Previous prompt">◀</button>
+          <button id="next-prompt" type="button" aria-label="Next prompt">▶</button>
+        </div>
+        <label id="denoise-control">
+          <span>Denoise</span>
+          <input id="denoise" type="range" min="0" max="60" step="1" value="15" />
+          <output id="denoise-value">15</output>
+          <button id="denoise-reset" type="button" aria-label="Reset denoise automation" hidden>×</button>
+        </label>
+        <button id="flip-camera" type="button">Flip</button>
+        <button id="fullscreen" type="button">Fullscreen</button>
+        <button id="hide-controls" type="button">Hide</button>
+      </div>
+      <form id="custom-form">
+        <input
+          id="custom-prompt"
+          type="text"
+          enterkeyhint="send"
+          placeholder="Custom prompt…"
+          autocomplete="off"
+        />
+        <button id="apply-prompt" type="submit">Apply</button>
+        <button id="clear-prompt" type="button" hidden>Clear</button>
+      </form>
+      <button id="start" type="button">Start</button>
+    </div>
+    <button id="toggle-ui" type="button" aria-label="Configure controls">Configure</button>
+
+    <script src="/app.js?v=20260728-denoise-start-15" type="module"></script>
+  </body>
+</html>

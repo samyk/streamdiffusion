@@ -1,0 +1,40 @@
+# Mobile web bridge — edit here, then ./scripts/run_bridge_web.sh
+# Certs: ./scripts/sync_web_certs.sh (from /Users/samy/Code/cert/stream.sa.my)
+
+[public]
+host = "vid.sa.my"
+port = 443
+
+[server]
+bind_host = "0.0.0.0"
+bind_port = 8790
+# hal redirects public port -> bind_port (scripts/setup_hal_web_port_forward.sh)
+
+[tls]
+cert = "certs/wildcard/fullchain.pem"
+key = "certs/wildcard/privkey.pem"
+
+[bridge]
+stream_id = "phone-1"
+daydream_port = 8782
+control_port = 8767
+screen_session = "sdtd-bridge-web"
+prompts_file = "toe/prompts.tsv"
+preset = "sd_turbo_fast"
+width = 960
+height = 536
+jpeg_quality = 72
+prompt = "paper comic halftone hero, Ben-Day dots, speech bubble pop-art"
+
+[bridge.upscale]
+enabled = false
+factor = 2
+method = "maxine-vsr"
+maxine_quality = "high"
+half = true
+
+[bridge.performance]
+acceleration = "tensorrt"
+attention_backend = "auto"
+flux_transformer_engine = true
+# frame_buffer_size = 1

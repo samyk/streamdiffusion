@@ -32,7 +32,50 @@ def build_parser() -> argparse.ArgumentParser:
         default=D["acceleration"],
         help="Override preset acceleration. Use xformers if TensorRT install/engine build fails.",
     )
-    parser.add_argument("--video-backend", choices=["ndi", "mock"], default="ndi")
+    parser.add_argument("--video-backend", choices=["ndi", "mock", "web"], default="ndi")
+    parser.add_argument(
+        "--web-host",
+        default="0.0.0.0",
+        help="Bind address for mobile web UI (with --web-port).",
+    )
+    parser.add_argument(
+        "--web-public-host",
+        default=None,
+        help="Public hostname shown in logs/API (e.g. stream.sa.my).",
+    )
+    parser.add_argument(
+        "--web-public-port",
+        type=int,
+        default=None,
+        help="Public HTTPS port for URLs (default: 443 when TLS enabled).",
+    )
+    parser.add_argument(
+        "--web-port",
+        type=int,
+        default=None,
+        help="Serve mobile camera UI + JPEG WebSocket on this port.",
+    )
+    parser.add_argument(
+        "--web-tls-cert",
+        default=None,
+        help="TLS certificate for mobile web (required for phone camera over the public internet).",
+    )
+    parser.add_argument(
+        "--web-tls-key",
+        default=None,
+        help="TLS private key for --web-tls-cert.",
+    )
+    parser.add_argument(
+        "--prompts-file",
+        default=None,
+        help="Text file with one prompt per line for the mobile prompt carousel.",
+    )
+    parser.add_argument(
+        "--web-jpeg-quality",
+        type=int,
+        default=72,
+        help="JPEG quality for browser video transport (default: 72).",
+    )
     parser.add_argument(
         "--passthrough-test",
         action="store_true",
@@ -117,6 +160,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.video_backend == "web" and args.web_port is None:
+        args.web_port = 8790
+    if args.web_port is not None and args.video_backend != "web":
+        build_parser().error("--web-port requires --video-backend web")
+    if bool(args.web_tls_cert) ^ bool(args.web_tls_key):
+        build_parser().error("--web-tls-cert and --web-tls-key must be set together")
     config = BridgeConfig(
         width=args.width,
         height=args.height,
@@ -139,6 +188,14 @@ def main() -> None:
         modelopt_enabled=args.modelopt,
         modelopt_checkpoint=args.modelopt_checkpoint,
         video_backend=args.video_backend,
+        web_host=args.web_host,
+        web_port=args.web_port,
+        web_public_host=args.web_public_host,
+        web_public_port=args.web_public_port,
+        web_tls_cert=args.web_tls_cert,
+        web_tls_key=args.web_tls_key,
+        prompts_file=args.prompts_file,
+        web_jpeg_quality=max(30, min(95, int(args.web_jpeg_quality))),
         upscale_enabled=args.upscale,
         upscale_factor=args.upscale_factor,
         upscale_method=args.upscale_method,
