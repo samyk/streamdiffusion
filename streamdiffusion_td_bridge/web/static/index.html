@@ -9,11 +9,12 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <title>StreamDiffusion Live</title>
-    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/style.css?v=20260729-align-select" />
   </head>
   <body>
     <div id="stage">
       <img id="output" alt="StreamDiffusion output" />
+      <img id="streamer-preview" alt="Streamer camera preview" />
       <video id="camera" playsinline muted autoplay></video>
       <canvas id="capture" aria-label="Sent camera frame preview"></canvas>
     </div>
@@ -45,13 +46,18 @@
           placeholder="Custom prompt…"
           autocomplete="off"
         />
+        <select id="prompt-history" aria-label="Previous prompts"></select>
         <button id="apply-prompt" type="submit">Apply</button>
-        <button id="clear-prompt" type="button" hidden>Clear</button>
+        <button id="clear-prompt" type="button" hidden>Auto</button>
       </form>
       <button id="start" type="button">Start</button>
     </div>
-    <button id="toggle-ui" type="button" aria-label="Configure controls">Configure</button>
+    <div id="viewer-count" hidden>0 viewers</div>
+    <div id="floating-actions">
+      <button id="takeover-stream" type="button" hidden>Take over</button>
+      <button id="toggle-ui" type="button" aria-label="Show params">Params</button>
+    </div>
 
-    <script src="/app.js?v=20260728-denoise-start-15" type="module"></script>
+    <script src="/app.js?v=20260729-auto-prompt-button" type="module"></script>
   </body>
 </html>

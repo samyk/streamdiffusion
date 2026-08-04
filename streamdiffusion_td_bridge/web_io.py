@@ -17,7 +17,10 @@ class WebFrameHub:
 
     incoming: LatestFrameQueue = field(default_factory=LatestFrameQueue)
     outgoing: LatestFrameQueue = field(default_factory=LatestFrameQueue)
+    latest_input_preview_jpeg: bytes | None = None
+    latest_input_preview_sequence: int = 0
     latest_output_jpeg: bytes | None = None
+    latest_output_sequence: int = 0
     jpeg_quality: int = 72
     _last_input_at: float = 0.0
 
@@ -28,6 +31,12 @@ class WebFrameHub:
             image = Image.open(io.BytesIO(payload)).convert("RGB")
         except Exception:  # noqa: BLE001
             return
+        preview = _crop_black_padding(image)
+        preview.thumbnail((240, 180), Image.Resampling.LANCZOS)
+        preview_buffer = io.BytesIO()
+        preview.save(preview_buffer, format="JPEG", quality=45, optimize=False)
+        self.latest_input_preview_jpeg = preview_buffer.getvalue()
+        self.latest_input_preview_sequence += 1
         rgb = np.ascontiguousarray(np.array(image, dtype=np.uint8))
         rgb = resize_rgb(rgb, width, height)
         self._last_input_at = time.monotonic()
@@ -44,6 +53,7 @@ class WebFrameHub:
             optimize=False,
         )
         self.latest_output_jpeg = buffer.getvalue()
+        self.latest_output_sequence += 1
 
 
 @dataclass
@@ -68,6 +78,22 @@ class WebVideoInput:
 
     def close(self) -> None:
         return None
+
+
+def _crop_black_padding(image: Image.Image) -> Image.Image:
+    """Remove canvas letterboxing from the viewer-only input preview."""
+    arr = np.asarray(image)
+    mask = arr.max(axis=2) > 8
+    if not mask.any():
+        return image.copy()
+    ys, xs = np.where(mask)
+    left = int(xs.min())
+    right = int(xs.max()) + 1
+    top = int(ys.min())
+    bottom = int(ys.max()) + 1
+    if right - left < 8 or bottom - top < 8:
+        return image.copy()
+    return image.crop((left, top, right, bottom))
 
 
 @dataclass

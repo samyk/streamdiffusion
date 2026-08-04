@@ -1,4 +1,5 @@
 const output = document.getElementById("output");
+const streamerPreview = document.getElementById("streamer-preview");
 const camera = document.getElementById("camera");
 const capture = document.getElementById("capture");
 const statusEl = document.getElementById("status");
@@ -6,6 +7,7 @@ const livePrompt = document.getElementById("live-prompt");
 const livePromptInline = document.getElementById("live-prompt-inline");
 const customForm = document.getElementById("custom-form");
 const customPrompt = document.getElementById("custom-prompt");
+const promptHistoryList = document.getElementById("prompt-history");
 const clearPromptBtn = document.getElementById("clear-prompt");
 const startBtn = document.getElementById("start");
 const flipCameraBtn = document.getElementById("flip-camera");
@@ -13,6 +15,8 @@ const fullscreenBtn = document.getElementById("fullscreen");
 const prevBtn = document.getElementById("prev-prompt");
 const nextBtn = document.getElementById("next-prompt");
 const toggleUiBtn = document.getElementById("toggle-ui");
+const takeoverStreamBtn = document.getElementById("takeover-stream");
+const viewerCountEl = document.getElementById("viewer-count");
 const overlay = document.getElementById("overlay");
 const denoise = document.getElementById("denoise");
 const denoiseValue = document.getElementById("denoise-value");
@@ -25,18 +29,22 @@ const state = {
   inferWidth: 960,
   inferHeight: 536,
   prompts: [],
+  promptHistory: [],
   promptIndex: 0,
   currentPrompt: "",
   customPromptLocked: false,
   ws: null,
+  wsRole: "viewer",
   running: false,
+  producerActive: false,
+  viewerCount: 0,
   captureTimer: null,
   promptTimer: null,
   denoiseTimer: null,
   jpegQuality: 0.58,
-  targetFps: 8,
-  minFps: 4,
-  maxFps: 14,
+  targetFps: 12,
+  minFps: 6,
+  maxFps: 24,
   goodFrames: 0,
   encodingFrame: false,
   maxBufferedBytes: 512 * 1024,
@@ -61,8 +69,9 @@ function setStatus(text) {
 function setOverlayHidden(hidden) {
   overlay.classList.toggle("hidden", hidden);
   document.body.classList.toggle("controls-hidden", hidden);
-  toggleUiBtn.textContent = hidden ? "Configure" : "Hide";
-  toggleUiBtn.setAttribute("aria-label", hidden ? "Configure controls" : "Hide controls");
+  toggleUiBtn.textContent = hidden ? "Params" : "Hide";
+  toggleUiBtn.setAttribute("aria-label", hidden ? "Show params" : "Hide params");
+  updateTakeoverUi();
 }
 
 function setLivePrompt(text) {
@@ -70,10 +79,65 @@ function setLivePrompt(text) {
   livePromptInline.textContent = text;
 }
 
-function wsUrl() {
+function updateTakeoverUi() {
+  const canTakeOver = !state.running && state.producerActive;
+  document.body.classList.toggle("producing", state.running);
+  document.body.classList.toggle("producer-active", canTakeOver);
+  startBtn.textContent = canTakeOver ? "Take over stream" : "Start";
+  takeoverStreamBtn.hidden = !canTakeOver || !document.body.classList.contains("controls-hidden");
+  if (!state.producerActive) {
+    streamerPreview.removeAttribute("src");
+    streamerPreview.classList.remove("ready");
+  }
+}
+
+function updateViewerCount() {
+  const count = Math.max(0, Number(state.viewerCount) || 0);
+  viewerCountEl.hidden = !state.running;
+  viewerCountEl.textContent = `${count} ${count === 1 ? "viewer" : "viewers"}`;
+  viewerCountEl.classList.toggle("active", count > 0);
+}
+
+function dedupePrompts(prompts) {
+  const seen = new Set();
+  const deduped = [];
+  for (const prompt of prompts) {
+    const text = String(prompt || "").trim();
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(text);
+  }
+  return deduped;
+}
+
+function setPromptHistory(prompts) {
+  state.promptHistory = dedupePrompts(prompts).slice(0, 100);
+  promptHistoryList.replaceChildren(
+    (() => {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "Recent";
+      return option;
+    })(),
+    ...state.promptHistory.map((prompt) => {
+      const option = document.createElement("option");
+      option.value = prompt;
+      option.textContent = prompt;
+      return option;
+    }),
+  );
+  promptHistoryList.value = "";
+}
+
+function rememberPrompt(prompt) {
+  setPromptHistory([prompt, ...state.promptHistory, ...state.prompts]);
+}
+
+function wsUrl(role = "viewer") {
   const base = state.publicUrl ? new URL(state.publicUrl) : location;
   const proto = base.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${base.host}/ws`;
+  return `${proto}://${base.host}/ws?role=${encodeURIComponent(role)}`;
 }
 
 async function loadConfig() {
@@ -88,7 +152,14 @@ async function loadConfig() {
   state.inferWidth = config.infer_width;
   state.inferHeight = config.infer_height;
   state.currentPrompt = (config.prompt || "").trim();
+  state.producerActive = Boolean(config.producer_active);
+  state.viewerCount = Number(config.viewer_count) || 0;
   state.prompts = Array.isArray(promptsPayload.prompts) ? promptsPayload.prompts : [];
+  setPromptHistory([
+    ...(Array.isArray(config.prompt_history) ? config.prompt_history : []),
+    ...(Array.isArray(promptsPayload.history) ? promptsPayload.history : []),
+    ...state.prompts,
+  ]);
   if (state.prompts.length === 0 && config.prompt) {
     state.prompts = [config.prompt];
   }
@@ -108,6 +179,8 @@ async function loadConfig() {
     state.promptIndex = liveIndex >= 0 ? liveIndex : state.promptIndex;
     setLivePrompt(state.prompts[state.promptIndex] || "");
   }
+  updateTakeoverUi();
+  updateViewerCount();
 }
 
 async function patchParams(params) {
@@ -124,10 +197,8 @@ async function applyPrompt(prompt, { custom = false } = {}) {
   if (!trimmed) return;
   state.currentPrompt = trimmed;
   setLivePrompt(trimmed);
+  rememberPrompt(trimmed);
   await patchParams({ prompt: trimmed, custom_prompt: custom });
-  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ type: "set_prompt", prompt: trimmed }));
-  }
 }
 
 function rotatePrompt(delta = 1) {
@@ -165,7 +236,7 @@ async function applyDenoise(value, { force = false } = {}) {
   if (!force && step === state.lastDenoiseSent) return;
   if (force) {
     state.lastDenoiseSent = step;
-    await patchParams({ t_index_list: [backendStep] });
+    await patchParams({ t_index_list: [backendStep], denoise_auto: state.denoiseAuto });
     return;
   }
   state.pendingDenoise = step;
@@ -180,7 +251,7 @@ async function flushDenoise() {
   if (step == null || step === state.lastDenoiseSent) return;
   state.lastDenoiseSent = step;
   const backendStep = Math.max(1, Math.min(49, step));
-  await patchParams({ t_index_list: [backendStep] });
+  await patchParams({ t_index_list: [backendStep], denoise_auto: state.denoiseAuto });
   if (state.pendingDenoise != null) {
     state.denoiseSendTimer = window.setTimeout(() => flushDenoise().catch(console.error), 150);
   }
@@ -213,23 +284,38 @@ async function enterFullscreen() {
   }
 }
 
-function connectSocket() {
+function connectSocket(role = "viewer") {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl());
+    const ws = new WebSocket(wsUrl(role));
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
       state.ws = ws;
+      state.wsRole = role;
       resolve(ws);
     };
-    ws.onerror = () => reject(new Error(`WebSocket failed: ${wsUrl()}`));
+    ws.onerror = () => reject(new Error(`WebSocket failed: ${wsUrl(role)}`));
     ws.onclose = () => {
+      if (role !== "producer") {
+        if (state.ws === ws) state.ws = null;
+        return;
+      }
       if (state.running) setStatus("Disconnected - tap Start to reconnect");
       state.ws = null;
       state.running = false;
       stopLiveLoops();
+      stopCamera();
       startBtn.classList.remove("running");
+      connectSocket("viewer")
+        .then(() => loadConfig())
+        .then(() => startCamera({ previewOnly: true }).catch(console.debug))
+        .then(() => setStatus(""))
+        .catch(() => setStatus("Disconnected - tap Start to reconnect"));
     };
     ws.onmessage = (event) => {
+      if (typeof event.data === "string") {
+        handleSocketEvent(event.data);
+        return;
+      }
       if (!(event.data instanceof ArrayBuffer)) return;
       const blob = new Blob([event.data], { type: "image/jpeg" });
       const url = URL.createObjectURL(blob);
@@ -241,6 +327,69 @@ function connectSocket() {
   });
 }
 
+function handleSocketEvent(raw) {
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (payload.type === "producer_status") {
+    state.producerActive = Boolean(payload.active);
+    updateTakeoverUi();
+  } else if (payload.type === "viewer_count") {
+    state.viewerCount = Number(payload.count) || 0;
+    updateViewerCount();
+  } else if (payload.type === "params_update") {
+    applyRemoteParams(payload);
+  } else if (payload.type === "input_preview" && typeof payload.jpeg === "string") {
+    if (state.running) return;
+    streamerPreview.src = payload.jpeg;
+    streamerPreview.classList.add("ready");
+  }
+}
+
+function applyRemoteParams(payload) {
+  const params = payload.params && typeof payload.params === "object" ? payload.params : {};
+  if (typeof params.prompt === "string" && Array.isArray(payload.prompt_history)) {
+    setPromptHistory([...payload.prompt_history, ...state.prompts]);
+  }
+  if (params.clear_custom_prompt) {
+    state.customPromptLocked = false;
+    clearPromptBtn.hidden = true;
+  }
+  if (typeof params.prompt === "string" && params.prompt.trim()) {
+    const prompt = params.prompt.trim();
+    state.currentPrompt = prompt;
+    setLivePrompt(prompt);
+    rememberPrompt(prompt);
+    const promptIndex = state.prompts.indexOf(prompt);
+    if (promptIndex >= 0) state.promptIndex = promptIndex;
+    state.customPromptLocked = Boolean(params.custom_prompt) || promptIndex < 0;
+    clearPromptBtn.hidden = !state.customPromptLocked;
+    if (state.customPromptLocked) {
+      customPrompt.value = prompt;
+    }
+  }
+  if (typeof params.denoise_auto === "boolean") {
+    const wasDenoiseAuto = state.denoiseAuto;
+    state.denoiseAuto = params.denoise_auto;
+    denoiseReset.hidden = state.denoiseAuto;
+    if (!state.denoiseAuto) {
+      clearInterval(state.denoiseTimer);
+    } else if (!wasDenoiseAuto && state.running) {
+      startDenoiseAutorange();
+    }
+  }
+  if (Array.isArray(params.t_index_list) && params.t_index_list.length > 0) {
+    if (state.running && params.denoise_auto !== false) return;
+    const step = normalizeDenoise(params.t_index_list[0]);
+    state.lastDenoiseSent = step;
+    denoise.value = String(step);
+    denoiseValue.value = String(step);
+  }
+}
+
 function stopCamera() {
   if (!camera.srcObject) return;
   for (const track of camera.srcObject.getTracks()) {
@@ -249,14 +398,14 @@ function stopCamera() {
   camera.srcObject = null;
 }
 
-async function startCamera() {
+async function startCamera({ previewOnly = false } = {}) {
   stopCamera();
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
     video: {
       facingMode: { ideal: state.facingMode },
-      width: { ideal: 1920 },
-      height: { ideal: 1080 },
+      width: { ideal: previewOnly ? 480 : 1920 },
+      height: { ideal: previewOnly ? 360 : 1080 },
     },
   });
   camera.srcObject = stream;
@@ -267,9 +416,8 @@ async function startCamera() {
 async function flipCamera() {
   state.facingMode = state.facingMode === "environment" ? "user" : "environment";
   flipCameraBtn.textContent = state.facingMode === "environment" ? "Flip" : "Back";
-  if (!state.running) return;
   try {
-    await startCamera();
+    await startCamera({ previewOnly: !state.running });
   } catch (err) {
     console.error(err);
     setStatus("Could not switch camera");
@@ -279,6 +427,38 @@ async function flipCamera() {
 function startCaptureLoop() {
   const ctx = capture.getContext("2d", { alpha: false });
   clearTimeout(state.captureTimer);
+
+  const drawCamera = (dx, dy, dw, dh) => {
+    if (state.mirrorInput) {
+      ctx.save();
+      ctx.translate(state.inferWidth, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(
+        camera,
+        0,
+        0,
+        camera.videoWidth,
+        camera.videoHeight,
+        dx,
+        dy,
+        dw,
+        dh,
+      );
+      ctx.restore();
+    } else {
+      ctx.drawImage(
+        camera,
+        0,
+        0,
+        camera.videoWidth,
+        camera.videoHeight,
+        dx,
+        dy,
+        dw,
+        dh,
+      );
+    }
+  };
 
   const noteBackpressure = () => {
     state.goodFrames = 0;
@@ -315,11 +495,25 @@ function startCaptureLoop() {
 
     capture.width = state.inferWidth;
     capture.height = state.inferHeight;
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, state.inferWidth, state.inferHeight);
 
     const targetAspect = state.inferWidth / state.inferHeight;
     const sourceAspect = vw / vh;
+    let coverW = state.inferWidth;
+    let coverH = state.inferHeight;
+    let coverX = 0;
+    let coverY = 0;
+    if (sourceAspect > targetAspect) {
+      coverW = Math.round(state.inferHeight * sourceAspect);
+      coverX = Math.round((state.inferWidth - coverW) / 2);
+    } else {
+      coverH = Math.round(state.inferWidth / sourceAspect);
+      coverY = Math.round((state.inferHeight - coverH) / 2);
+    }
+
+    ctx.globalAlpha = 0.65;
+    drawCamera(coverX, coverY, coverW, coverH);
+    ctx.globalAlpha = 1;
+
     let dw = state.inferWidth;
     let dh = state.inferHeight;
     let dx = 0;
@@ -332,15 +526,7 @@ function startCaptureLoop() {
       dx = Math.round((state.inferWidth - dw) / 2);
     }
 
-    if (state.mirrorInput) {
-      ctx.save();
-      ctx.translate(state.inferWidth, 0);
-      ctx.scale(-1, 1);
-      ctx.drawImage(camera, 0, 0, vw, vh, dx, dy, dw, dh);
-      ctx.restore();
-    } else {
-      ctx.drawImage(camera, 0, 0, vw, vh, dx, dy, dw, dh);
-    }
+    drawCamera(dx, dy, dw, dh);
     state.encodingFrame = true;
     capture.toBlob(
       (blob) => {
@@ -377,10 +563,16 @@ async function start() {
       await enterFullscreen();
     }
     await loadConfig();
-    await startCamera();
-    await connectSocket();
+    await startCamera({ previewOnly: false });
+    if (state.ws) {
+      state.ws.close();
+      state.ws = null;
+    }
+    await connectSocket("producer");
     state.running = true;
+    state.producerActive = true;
     startBtn.classList.add("running");
+    updateTakeoverUi();
     startCaptureLoop();
     startPromptAutorotate();
     startDenoiseAutorange();
@@ -393,6 +585,7 @@ async function start() {
     setStatus(err.message || "Failed to start (camera needs HTTPS on remote phones)");
     startBtn.classList.remove("running");
     state.running = false;
+    updateTakeoverUi();
   } finally {
     startBtn.disabled = false;
   }
@@ -410,10 +603,19 @@ customForm.addEventListener("submit", (event) => {
   applyPrompt(prompt, { custom: true }).catch(console.error);
 });
 
+promptHistoryList.addEventListener("change", () => {
+  const prompt = promptHistoryList.value.trim();
+  promptHistoryList.value = "";
+  if (!prompt) return;
+  customPrompt.value = prompt;
+  state.customPromptLocked = true;
+  clearPromptBtn.hidden = false;
+  applyPrompt(prompt, { custom: true }).catch(console.error);
+});
+
 clearPromptBtn.addEventListener("click", () => {
   state.customPromptLocked = false;
   clearPromptBtn.hidden = true;
-  customPrompt.value = "";
   patchParams({ clear_custom_prompt: true }).catch(console.error);
   applyPrompt(state.prompts[state.promptIndex] || "").catch(console.error);
   startPromptAutorotate();
@@ -429,6 +631,7 @@ denoise.addEventListener("input", () => {
 denoiseReset.addEventListener("click", () => {
   state.denoiseAuto = true;
   denoiseReset.hidden = true;
+  patchParams({ denoise_auto: true }).catch(console.error);
   startDenoiseAutorange();
 });
 
@@ -455,6 +658,7 @@ camera.addEventListener("pointerup", (event) => {
 });
 
 startBtn.addEventListener("click", start);
+takeoverStreamBtn.addEventListener("click", start);
 flipCameraBtn.addEventListener("click", flipCamera);
 fullscreenBtn.addEventListener("click", enterFullscreen);
 hideControlsBtn.addEventListener("click", () => setOverlayHidden(true));
@@ -462,6 +666,9 @@ toggleUiBtn.addEventListener("click", () => {
   setOverlayHidden(!overlay.classList.contains("hidden"));
 });
 
-loadConfig().catch(() => {
-  setStatus("Could not load server config");
-});
+loadConfig()
+  .then(() => connectSocket("viewer"))
+  .then(() => startCamera({ previewOnly: true }).catch(console.debug))
+  .catch(() => {
+    setStatus("Could not load server config");
+  });
