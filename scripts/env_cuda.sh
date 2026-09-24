@@ -46,6 +46,14 @@ if [[ -n "${_CUDA_LIB_DIRS}" ]]; then
   export LD_LIBRARY_PATH="${_CUDA_LIB_DIRS}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
 
+# Keep GPU-heavy bridge runs from letting CPU math libraries fan out across the
+# whole machine. Override these in the environment when doing CPU-bound testing.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-4}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-4}"
+export VECLIB_MAXIMUM_THREADS="${VECLIB_MAXIMUM_THREADS:-4}"
+
 # Hugging Face gated models (FLUX.2 Klein 9B, etc.) need a token in non-interactive sessions.
 if [[ -z "${HF_TOKEN:-}" ]]; then
   if [[ -f "${HOME}/.cache/huggingface/token" ]]; then
